@@ -14,8 +14,8 @@ android {
         applicationId = "com.kimsan.runexport"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     // 고정된 디버그 서명 키: 새 버전을 덮어쓰기 설치할 수 있도록 (빌드마다 키가 바뀌지 않게)

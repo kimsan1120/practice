@@ -163,13 +163,23 @@ class AnalysisTest {
     }
 
     @Test
-    fun `디커플링과 심박 드리프트`() {
-        // 같은 속도인데 후반 심박이 10% 높으면 디커플링 약 9%
-        val tl = (0..600L).map { SplitCalculator.Mark(t(it), it * 3.0) }
-        val hr = (0..600L).map { HrPoint(t(it), if (it < 300) 150 else 165) }
-        val (dec, drift) = Analysis.efficiency(tl, hr, t(0), t(600))!!
+    fun `디커플링과 심박 드리프트 - 30분 이상, 앞 10분 워밍업 제외`() {
+        // 60분 일정한 속도. 워밍업 10분 심박 120, 이후 전반 150, 후반 165
+        val tl = (0..3600L).map { SplitCalculator.Mark(t(it), it * 3.0) }
+        val hr = (0..3600L).map { HrPoint(t(it), if (it < 600) 120 else if (it < 2100) 150 else 165) }
+        val (dec, drift) = Analysis.efficiency(tl, hr, t(0), t(3600))!!
         assertEquals((1 - 150.0 / 165.0) * 100, dec, 0.5)
         assertEquals(15.0, drift, 0.5)
+        // 20분짜리 기록은 계산하지 않음
+        assertNull(Analysis.efficiency(tl, hr, t(0), t(1200)))
+    }
+
+    @Test
+    fun `1초 미만 간격 심박 샘플도 구간 시간에 들어간다`() {
+        // 0.98초 간격 100개 → 약 98초 (초 단위로 버리면 0초가 되던 버그)
+        val hr = (0 until 100).map { HrPoint(t0.plusMillis(it * 980L), 150) }
+        val z = Analysis.zones5(hr, t0.plusMillis(99 * 980L), 186)
+        assertEquals(97L, z.sumOf { it.seconds }) // 99 간격 × 0.98초 = 97.02초
     }
 
     @Test

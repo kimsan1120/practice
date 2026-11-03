@@ -27,6 +27,7 @@ data class ExportBundle(
     val compare: RunSummary? = null,
     val compareMetrics: RunMetrics? = null,
     val pbs: Map<Int, RunMetrics> = emptyMap(),
+    val trimpBaseline: Double? = null,
 ) {
     val restingHr: Long? get() = notes.restingHr?.toLong() ?: detail.restingHr
     val weightKg: Double? get() = detail.weightKg ?: profile.weightKg
@@ -77,8 +78,11 @@ object Exporter {
         val a = b.analysis
         val z = s.start.atZone(ZoneId.systemDefault())
         val dow = z.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, Locale.KOREAN)
-        appendLine("[러닝 기록] ${z.toLocalDate()} ($dow) ${s.start.localTime()}~${s.end.localTime()} · ${s.title ?: s.typeName}")
-        b.weather?.let { appendLine("기온: ${weatherText(it)}") }
+        appendLine("[러닝 기록] ${z.toLocalDate()} ($dow) ${timeOfDay(s.start)} ${s.start.localTime()}~${s.end.localTime()} · ${s.title ?: s.typeName}")
+        when {
+            b.weather != null -> appendLine("기온: ${weatherText(b.weather)}")
+            b.notes.tempC != null -> appendLine("기온: ${fmt1(b.notes.tempC)}°C (직접 입력)")
+        }
         val cond = listOfNotNull(
             b.notes.rpe?.let { "체감 난이도 $it/10" },
             b.notes.memo.takeIf { it.isNotBlank() }?.let { "메모: $it" },
@@ -129,7 +133,10 @@ object Exporter {
             m.ef?.let { appendLine("- 효율 지수(EF): ${String.format(Locale.US, "%.2f", it)} (분당 m ÷ 평균 심박)") }
             m.decouplingPct?.let { appendLine("- 유산소 디커플링: ${fmt1(it)}% (${Analysis.decouplingLabel(it)})") }
             m.hrDriftBpm?.let { appendLine("- 심박 드리프트: 후반 ${if (it >= 0) "+" else ""}${fmt1(it)} bpm") }
-            m.trimp?.let { appendLine("- 훈련 부하(TRIMP): ${fmt0(it)} (${Analysis.trimpLabel(it)}, 안정시 ${a.restHrUsed}/최대 ${a.maxHrUsed})") }
+            m.trimp?.let {
+                val rel = Analysis.trimpRelative(it, b.trimpBaseline) ?: "최근 4주 비교 기록 없음"
+                appendLine("- 훈련 부하(TRIMP): ${fmt0(it)} ($rel · 안정시 ${a.restHrUsed}${if (a.restHrSource == "기본값") "(기본값)" else ""}/최대 ${a.maxHrUsed})")
+            }
             appendLine()
         }
         b.compare?.let { c ->

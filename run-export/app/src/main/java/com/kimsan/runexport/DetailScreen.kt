@@ -76,7 +76,7 @@ fun DetailScreen(
                 Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(HeroBrush).padding(20.dp),
             ) {
                 Text(
-                    "${s.title ?: s.typeName} · ${s.start.localDateTime().take(10)} ${s.start.localTime()}–${s.end.localTime()}",
+                    "${s.title ?: s.typeName} · ${s.start.localDateTime().take(10)} ${timeOfDay(s.start)} ${s.start.localTime()}–${s.end.localTime()}",
                     style = MaterialTheme.typography.labelLarge,
                     color = Color.White.copy(alpha = 0.9f),
                 )
@@ -91,7 +91,8 @@ fun DetailScreen(
                 }
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "출처: ${appLabel(context, s.sourcePackage)}" + (bundle.weather?.let { " · ${fmt1(it.tempC)}°C" } ?: "") +
+                    "출처: ${appLabel(context, s.sourcePackage)}" +
+                        ((bundle.weather?.tempC ?: bundle.notes.tempC)?.let { " · ${fmt1(it)}°C" } ?: "") +
                         (bundle.notes.rpe?.let { " · 체감 $it/10" } ?: ""),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.8f),
@@ -193,9 +194,23 @@ fun DetailScreen(
                         m.ef?.let { "효율 지수 (EF)" to String.format(java.util.Locale.US, "%.2f", it) },
                         m.decouplingPct?.let { "유산소 디커플링" to "${fmt1(it)}%" },
                         m.hrDriftBpm?.let { "심박 드리프트" to "${if (it >= 0) "+" else ""}${fmt1(it)} bpm" },
-                        m.trimp?.let { "훈련 부하 (TRIMP)" to "${fmt0(it)} · ${Analysis.trimpLabel(it)}" },
+                        m.trimp?.let { "훈련 부하 (TRIMP)" to fmt0(it) },
                     )
                 )
+                m.trimp?.let { t ->
+                    Text(
+                        Analysis.trimpRelative(t, bundle.trimpBaseline)
+                            ?: "최근 4주 비교 기록이 없어요 (통계 → 모든 기록 분석을 누르면 생겨요)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MetricColors.Calories,
+                    )
+                }
+                if (m.decouplingPct == null && s.activeDuration < Analysis.DECOUPLING_MIN_DURATION) {
+                    Note("유산소 디커플링은 30분 이상 달린 기록에서만 계산해요 (앞 10분 워밍업 제외).")
+                }
+                if (m.trimp == null && a.maxHrUsed == null) {
+                    Note("훈련 부하는 최대 심박이 필요해요. 설정에 최대 심박(예: 삼성 헬스의 186)을 입력하세요.")
+                }
                 Note(
                     "EF = 분당 이동 거리 ÷ 평균 심박 (같은 심박에 더 빠르면 ↑) · 디커플링 = 전반 대비 후반 효율 저하" +
                         (m.decouplingPct?.let { " → ${Analysis.decouplingLabel(it)}" } ?: "") +
@@ -243,7 +258,11 @@ fun DetailScreen(
         item {
             Section("심박수 구간") {
                 if (a.zones5.isEmpty()) {
-                    Text("심박 데이터가 없거나 최대 심박을 알 수 없어요. 설정에서 최대 심박 또는 출생연도를 입력하세요.", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (d.heartRate.isEmpty()) "심박 데이터가 없어요."
+                        else "심박 구간은 고정된 최대 심박이 필요해요. 설정에 최대 심박(삼성 헬스 심박수 구간 화면의 값, 예: 186)이나 출생연도를 입력하세요. 기록마다 그날 최대값을 쓰면 기록끼리 비교가 안 돼요.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 } else {
                     Text("최대 심박 ${a.maxHrUsed} 기준 (${a.maxHrSource})", style = MaterialTheme.typography.labelLarge)
                     ZoneBars(a.zones5)
@@ -269,7 +288,8 @@ fun DetailScreen(
                 val r = a.recovery
                 if (r == null) {
                     Text(
-                        "운동 종료 후 심박 데이터가 Health Connect 에 없어요. 워치가 종료 후에도 심박을 기록해야 계산돼요.",
+                        "삼성 헬스가 운동 종료 후 심박을 Health Connect 로 넘기지 않아요 (데이터 진단 참고). " +
+                            "삼성 헬스 앱의 회복 심박 그래프에서 0초·1분·2분 값을 메모에 적어두면 분석 텍스트에 함께 들어가요.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
@@ -329,10 +349,22 @@ fun DetailScreen(
                     weatherLoading -> CircularProgressIndicator(Modifier.padding(4.dp))
                     w != null -> Text(weatherText(w), style = MaterialTheme.typography.bodyMedium)
                     else -> {
-                        OutlinedButton(onClick = onFetchWeather, enabled = d.route.isNotEmpty()) { Text("운동 시각 기온 가져오기") }
-                        Note(
-                            if (d.route.isEmpty()) "GPS 경로를 먼저 불러와야 위치를 알 수 있어요."
-                            else "버튼을 누르면 대략적인 위치(약 1km 단위)와 날짜를 Open-Meteo 에 보내 기온을 받아요."
+                        if (d.route.isNotEmpty()) {
+                            OutlinedButton(onClick = onFetchWeather) { Text("운동 시각 기온 가져오기") }
+                            Note("버튼을 누르면 대략적인 위치(약 1km 단위)와 날짜를 Open-Meteo 에 보내 기온을 받아요.")
+                        } else {
+                            Note("GPS 경로가 없어서 자동으로 못 가져와요. 직접 입력하거나, 위 '경로'에서 GPS 경로를 불러오세요.")
+                        }
+                        var temp by rememberSaveable(s.id + "temp") { mutableStateOf(bundle.notes.tempC?.let { fmt1(it) } ?: "") }
+                        OutlinedTextField(
+                            value = temp,
+                            onValueChange = { v ->
+                                temp = v.filter { it.isDigit() || it == '.' || it == '-' }.take(5)
+                                onNotesChange(bundle.notes.copy(tempC = temp.toDoubleOrNull()))
+                            },
+                            label = { Text("기온 직접 입력 (°C)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }
@@ -412,7 +444,7 @@ private fun ChartTabs(bundle: ExportBundle, fastest: Pair<java.time.Instant, jav
         when (tab) {
             0 -> "30초 평균 · 위로 갈수록 빠름" + if (bundle.detail.speed.size < 3) " · GPS 경로로 계산" else ""
             1 -> "5초 평균"
-            2 -> if (a.cadenceSeries.isEmpty()) "Health Connect 에 시간별 케이던스/걸음 기록이 없어요" else "20초 평균"
+            2 -> if (a.cadenceSeries.isEmpty()) "시간별 케이던스는 삼성 헬스 미제공 (평균은 걸음 ÷ 시간으로 계산)" else "20초 평균"
             else -> if (a.altitudeSeries.isEmpty()) "GPS 경로(고도)가 있어야 그려져요" else "GPS 고도, 5포인트 평균"
         } + if (fastest != null) " · 음영 = 가장 빠른 1km" else ""
     )

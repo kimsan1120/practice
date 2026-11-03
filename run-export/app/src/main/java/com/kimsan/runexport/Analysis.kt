@@ -73,8 +73,7 @@ object Analysis {
         val (maxHr, maxHrSource) = when {
             profile.maxHr != null -> profile.maxHr to "설정값"
             age != null -> (220 - age) to "220 − 나이"
-            s.maxHr != null -> s.maxHr.toInt() to "이번 기록 최대"
-            else -> null to ""
+            else -> null to "" // 기록마다 다른 최대값을 쓰면 기록끼리 비교가 안 되므로 쓰지 않음
         }
         val cadence = cadenceSeries(d)
         val (avgCad, maxCad) = cadenceStats(cadence)
@@ -116,6 +115,8 @@ object Analysis {
     }
 
     const val DEFAULT_REST_HR = 60
+    val DECOUPLING_MIN_DURATION: Duration = Duration.ofMinutes(30)
+    val DECOUPLING_WARMUP: Duration = Duration.ofMinutes(10)
 
     // ---------- 베스트 기록 / 효율 / 부하 ----------
 
@@ -168,11 +169,14 @@ object Analysis {
      * (유산소 디커플링 %, 심박 드리프트 bpm).
      * 전반/후반의 (분당 거리 ÷ 평균 심박) 을 비교. 효율이 후반에 떨어질수록 + 값.
      */
-    fun efficiency(tl: List<SplitCalculator.Mark>, hr: List<HrPoint>, start: Instant, end: Instant): Pair<Double, Double>? {
+    fun efficiency(tl: List<SplitCalculator.Mark>, hr: List<HrPoint>, sessionStart: Instant, end: Instant): Pair<Double, Double>? {
         if (tl.size < 2) return null
+        // 디커플링은 30분 이상 꾸준히 달린 기록에 쓰는 지표. 앞 10분(워밍업, 심박이 낮음)은 빼고 계산
+        if (Duration.between(sessionStart, end) < DECOUPLING_MIN_DURATION) return null
+        val start = sessionStart.plus(DECOUPLING_WARMUP)
         val mid = start.plusMillis(Duration.between(start, end).toMillis() / 2)
-        val hr1 = hr.filter { it.time.isBefore(mid) }
-        val hr2 = hr.filter { !it.time.isBefore(mid) }
+        val hr1 = hr.filter { !it.time.isBefore(start) && it.time.isBefore(mid) }
+        val hr2 = hr.filter { !it.time.isBefore(mid) && !it.time.isAfter(end) }
         if (hr1.size < 10 || hr2.size < 10) return null
         val d1 = metersAt(tl, mid) - metersAt(tl, start)
         val d2 = metersAt(tl, end) - metersAt(tl, mid)
@@ -214,18 +218,24 @@ object Analysis {
         var sum = 0.0
         for (i in hr.indices) {
             val next = hr.getOrNull(i + 1)?.time ?: end
-            val dtMin = min(Duration.between(hr[i].time, next).seconds, 10).coerceAtLeast(0) / 60.0
+            val dtMin = min(Duration.between(hr[i].time, next).toMillis(), 10_000L).coerceAtLeast(0) / 60000.0
             val hrr = ((hr[i].bpm - restHr).toDouble() / (maxHr - restHr)).coerceIn(0.0, 1.0)
             sum += dtMin * hrr * a * kotlin.math.exp(b * hrr)
         }
         return sum
     }
 
-    fun trimpLabel(t: Double): String = when {
-        t < 50 -> "가벼움"
-        t < 100 -> "보통"
-        t < 200 -> "높음"
-        else -> "매우 높음"
+    /** 최근 4주 평균 대비 (기준이 없으면 null) */
+    fun trimpRelative(t: Double, baseline: Double?): String? {
+        if (baseline == null || baseline <= 0) return null
+        val pct = (t / baseline - 1) * 100
+        val word = when {
+            pct < -25 -> "평소보다 가벼움"
+            pct <= 25 -> "평소 수준"
+            pct <= 60 -> "평소보다 높음"
+            else -> "평소보다 매우 높음"
+        }
+        return "최근 4주 평균 ${fmt0(baseline)} 대비 ${if (pct >= 0) "+" else ""}${fmt0(pct)}% · $word"
     }
 
     fun decouplingLabel(p: Double): String = when {
@@ -383,21 +393,23 @@ object Analysis {
      * 각 샘플은 다음 샘플까지(최대 10초) 유지된 것으로 계산. 비율은 구간 시간 합계 기준.
      */
     fun zones(hr: List<HrPoint>, end: Instant, lower: List<Int>, names: List<String>): List<Zone> {
-        val secs = LongArray(lower.size)
+        val ms = LongArray(lower.size)
         for (i in hr.indices) {
             val next = hr.getOrNull(i + 1)?.time ?: end
-            val dt = min(Duration.between(hr[i].time, next).seconds, 10).coerceAtLeast(0)
+            // 밀리초로 더한다 (초로 버리면 1초 미만 간격이 0초가 되어 시간이 빠짐). 10초 넘는 공백은 10초까지만
+            val dt = min(Duration.between(hr[i].time, next).toMillis(), 10_000L).coerceAtLeast(0)
             val z = lower.count { hr[i].bpm >= it } - 1
-            if (z >= 0) secs[z] += dt
+            if (z >= 0) ms[z] += dt
         }
-        val total = secs.sum().coerceAtLeast(1)
+        val secs = LongArray(ms.size) { Math.round(ms[it] / 1000.0) }
+        val total = ms.sum().coerceAtLeast(1)
         return names.mapIndexed { i, name ->
             Zone(
                 name = name,
                 fromBpm = lower[i],
                 toBpm = if (i == lower.size - 1) null else lower[i + 1] - 1,
                 seconds = secs[i],
-                fraction = secs[i].toDouble() / total,
+                fraction = ms[i].toDouble() / total,
             )
         }
     }

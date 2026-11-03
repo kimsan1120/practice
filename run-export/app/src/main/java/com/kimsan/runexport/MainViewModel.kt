@@ -39,6 +39,8 @@ data class UiState(
     val stats: StatsUi = StatsUi(),
     /** Health Connect 백그라운드 읽기 권한 (새 러닝 알림용) */
     val backgroundGranted: Boolean = false,
+    /** 이 기록 이전 4주 TRIMP 평균 */
+    val trimpBaseline: Double? = null,
 )
 
 data class StatsUi(
@@ -158,7 +160,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 베스트 기록 / 효율 / 부하 저장 (통계·PB 용)
         prefs.saveMetrics(a.metrics)
         val all = prefs.metrics()
-        state = state.copy(detail = d, analysis = a, pbs = Stats.personalBests(all.values))
+        val from = d.summary.start.minus(java.time.Duration.ofDays(28))
+        val baseline = all.values
+            .filter { it.id != d.summary.id && it.start.isBefore(d.summary.start) && !it.start.isBefore(from) }
+            .mapNotNull { it.trimp }
+            .takeIf { it.isNotEmpty() }?.average()
+        state = state.copy(detail = d, analysis = a, pbs = Stats.personalBests(all.values), trimpBaseline = baseline)
     }
 
     fun closeDetail() {
@@ -252,7 +259,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     val d = repo.readDetail(r, full = false)
                     val age = profile.ageAt(r.start.atZone(java.time.ZoneId.systemDefault()).year)
-                    val maxHr = profile.maxHr ?: age?.let { 220 - it } ?: r.maxHr?.toInt()
+                    val maxHr = profile.maxHr ?: age?.let { 220 - it }
                     val rest = prefs.notes(r.id).restingHr ?: Analysis.DEFAULT_REST_HR
                     prefs.saveMetrics(Analysis.metrics(d, maxHr, rest, profile.sex))
                 } catch (e: CancellationException) {

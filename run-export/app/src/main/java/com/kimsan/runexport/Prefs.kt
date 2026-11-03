@@ -40,6 +40,7 @@ class Prefs(context: Context) {
                 rpe = if (o.has("rpe")) o.getInt("rpe") else null,
                 memo = o.optString("memo", ""),
                 restingHr = if (o.has("restHr")) o.getInt("restHr") else null,
+                tempC = if (o.has("temp")) o.getDouble("temp") else null,
             )
         }.getOrDefault(RunNotes())
     }
@@ -49,6 +50,7 @@ class Prefs(context: Context) {
         n.rpe?.let { o.put("rpe", it) }
         o.put("memo", n.memo)
         n.restingHr?.let { o.put("restHr", it) }
+        n.tempC?.let { o.put("temp", it) }
         sp.edit().putString("notes_$sessionId", o.toString()).apply()
     }
 

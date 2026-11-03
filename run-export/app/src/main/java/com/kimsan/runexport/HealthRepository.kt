@@ -173,7 +173,7 @@ class HealthRepository(private val context: Context) {
             avgHr = pick(HeartRateRecord.BPM_AVG),
             maxHr = pick(HeartRateRecord.BPM_MAX),
             minHr = pick(HeartRateRecord.BPM_MIN),
-            steps = pick(StepsRecord.COUNT_TOTAL),
+            steps = pick(StepsRecord.COUNT_TOTAL)?.takeIf { it > 0 },
             totalKcal = pick(TotalCaloriesBurnedRecord.ENERGY_TOTAL)?.inKilocalories,
             activeKcal = pick(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)?.inKilocalories,
             // 평균 속도 = 거리 ÷ 운동 시간 (삼성 헬스와 같은 방식), 거리가 없으면 속도 기록 평균
@@ -245,7 +245,27 @@ class HealthRepository(private val context: Context) {
                 .distinctBy { it.time }.sortedBy { it.time }
         } else emptyList()
         val stepsRecords = if (hasSteps) safe { readPreferOrigin(StepsRecord::class, start, end, origin) } else emptyList()
-        val stepsIntervals = stepsRecords.map { StepsInterval(it.startTime, it.endTime, it.count) }.sortedBy { it.start }
+        // 세션 안에 걸음 기록이 없으면 앞뒤 1시간까지 넓혀서 찾는다 (삼성이 걸음을 큰 시간 단위로 묶어 쓰는 경우)
+        val stepsWide = if (hasSteps && stepsRecords.isEmpty()) safe {
+            readAll(StepsRecord::class, start.minus(Duration.ofHours(1)), end.plus(Duration.ofHours(1)))
+        } else emptyList()
+        val stepsOverlap = stepsWide.filter { it.endTime.isAfter(start) && it.startTime.isBefore(end) }
+        // 10분 이하로 짧은 기록만 겹친 비율로 나눠 쓴다 (긴 기록은 걷기 걸음까지 섞여 부정확)
+        val stepsShort = stepsOverlap.filter { Duration.between(it.startTime, it.endTime) <= Duration.ofMinutes(10) }
+        val stepsFromWide = stepsShort.takeIf { it.isNotEmpty() }?.sumOf { r ->
+            val span = Duration.between(r.startTime, r.endTime).toMillis().coerceAtLeast(1)
+            val ov = Duration.between(maxOf(r.startTime, start), minOf(r.endTime, end)).toMillis().coerceAtLeast(0)
+            r.count.toDouble() * ov / span
+        }
+        val stepsIntervals = (if (stepsRecords.isNotEmpty()) stepsRecords else stepsShort)
+            .map { StepsInterval(it.startTime, it.endTime, it.count) }.sortedBy { it.start }
+        val fixedSummary = if (summary.steps == null && stepsFromWide != null && stepsFromWide > 0)
+            summary.copy(steps = Math.round(stepsFromWide)) else summary
+
+        // 상승 고도 기록 (진단용)
+        val elevRecords = if (full && has(granted, ElevationGainedRecord::class)) safe {
+            readAll(ElevationGainedRecord::class, start, end)
+        } else emptyList()
 
         // 회복 심박: 종료 후 3분 (모든 앱)
         val recoveryEnd = end.plusSeconds(180)
@@ -288,25 +308,38 @@ class HealthRepository(private val context: Context) {
         val diag = listOf(
             DiagItem("기록한 앱", session.metadata.dataOrigin.packageName),
             DiagItem("기록 장치", session.metadata.device?.let { listOfNotNull(it.manufacturer, it.model).joinToString(" ") }?.ifBlank { null } ?: "-"),
-            DiagItem("심박 샘플", perm(granted, HeartRateRecord::class) { "${hr.size}개" }),
-            DiagItem("속도 샘플", perm(granted, SpeedRecord::class) { "${speed.size}개" }),
-            DiagItem("거리 기록", perm(granted, DistanceRecord::class) { "${sessionRecordsDistance}개" }),
-            DiagItem("걸음 기록", perm(granted, StepsRecord::class) { "${stepsRecords.size}개" }),
-            DiagItem("케이던스 샘플", perm(granted, StepsRecord::class) { "${cadence.size}개" }),
+            DiagItem("심박 샘플", perm(granted, HeartRateRecord::class) { cnt(hr.size) }),
+            DiagItem("속도 샘플", perm(granted, SpeedRecord::class) { cnt(speed.size) }),
+            DiagItem("거리 기록", perm(granted, DistanceRecord::class) { cnt(sessionRecordsDistance) }),
+            DiagItem("걸음 기록", perm(granted, StepsRecord::class) {
+                when {
+                    stepsRecords.isNotEmpty() -> "${stepsRecords.size}개"
+                    stepsOverlap.isNotEmpty() -> {
+                        val typical = stepsOverlap.map { Duration.between(it.startTime, it.endTime).toMinutes() }.sorted()[stepsOverlap.size / 2]
+                        "세션 안 0개 · 겹치는 기록 ${stepsOverlap.size}개 (보통 ${typical}분 단위)" +
+                            if (stepsShort.isNotEmpty()) " → 걸음 수 계산에 사용" else " → 너무 길어서 사용 안 함"
+                    }
+                    else -> cnt(0)
+                }
+            }),
+            DiagItem("케이던스 샘플", perm(granted, StepsRecord::class) { cnt(cadence.size) }),
+            DiagItem("상승 고도 기록", perm(granted, ElevationGainedRecord::class) {
+                cnt(elevRecords.size) + if (elevRecords.isEmpty() && route.any { it.altitudeM != null }) " · GPS 고도로 계산" else ""
+            }),
             DiagItem("GPS 경로", when (routeResult.toState()) {
                 RouteState.AVAILABLE -> "${route.size}개 포인트"
                 RouteState.CONSENT_REQUIRED -> "있음 (허락 필요)"
                 RouteState.NONE -> "없음"
             }),
             DiagItem("랩 / 세그먼트", "${session.laps.size}개 / ${session.segments.size}개"),
-            DiagItem("종료 후 3분 심박", perm(granted, HeartRateRecord::class) { "${recovery.size}개" }),
-            DiagItem("VO2max (최근 180일)", perm(granted, Vo2MaxRecord::class) { "${vo2History.size}개" }),
-            DiagItem("안정시 심박 (당일)", perm(granted, RestingHeartRateRecord::class) { "${resting.size}개" }),
-            DiagItem("체중 (최근 90일)", perm(granted, WeightRecord::class) { "${weights.size}개" }),
+            DiagItem("종료 후 3분 심박", perm(granted, HeartRateRecord::class) { cnt(recovery.size) }),
+            DiagItem("VO2max (최근 180일)", perm(granted, Vo2MaxRecord::class) { cnt(vo2History.size) }),
+            DiagItem("안정시 심박 (당일)", perm(granted, RestingHeartRateRecord::class) { cnt(resting.size) }),
+            DiagItem("체중 (최근 90일)", perm(granted, WeightRecord::class) { cnt(weights.size) }),
         )
 
         val base = RunDetail(
-            summary = summary,
+            summary = fixedSummary,
             heartRate = hr,
             speed = speed,
             route = route,
@@ -332,6 +365,9 @@ class HealthRepository(private val context: Context) {
 
     /** 부가 데이터 읽기 실패는 상세 화면 전체를 막지 않도록 빈 목록으로 */
     private inline fun <T> safe(block: () -> List<T>): List<T> = runCatching(block).getOrDefault(emptyList())
+
+    /** 0개면 '삼성 헬스 미제공' 으로 표시 */
+    private fun cnt(n: Int): String = if (n == 0) "0개 · 삼성 헬스 미제공" else "${n}개"
 
     private inline fun perm(granted: Set<String>, type: KClass<out Record>, value: () -> String): String =
         if (has(granted, type)) value() else "권한 없음"

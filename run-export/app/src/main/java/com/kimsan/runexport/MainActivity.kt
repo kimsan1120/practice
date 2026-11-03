@@ -154,6 +154,7 @@ fun AppRoot(
         ExportBundle(
             state.detail, state.analysis, state.notes, state.weather, state.profile,
             compare = state.compare, compareMetrics = state.compareMetrics, pbs = state.pbs,
+            trimpBaseline = state.trimpBaseline,
         ) else null
 
     Scaffold(

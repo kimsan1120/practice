@@ -161,7 +161,19 @@ data class RunNotes(
     val memo: String = "",
     /** 아침 안정시 심박 직접 입력 */
     val restingHr: Int? = null,
+    /** 기온 직접 입력 (°C) */
+    val tempC: Double? = null,
 )
+
+/** 시간대 라벨 (새벽 / 아침 / 오전 / 오후 / 저녁 / 밤) */
+fun timeOfDay(t: Instant): String = when (t.atZone(ZoneId.systemDefault()).hour) {
+    in 0..4 -> "새벽"
+    in 5..8 -> "아침"
+    in 9..11 -> "오전"
+    in 12..16 -> "오후"
+    in 17..20 -> "저녁"
+    else -> "밤"
+}
 
 /** 운동 시각의 날씨 (Open-Meteo) */
 data class WeatherInfo(
