@@ -208,9 +208,15 @@ private fun PermissionScreen(onRequest: () -> Unit) {
 }
 
 private fun openHealthConnectSettings(context: Context) {
-    runCatching {
-        context.startActivity(Intent(HealthConnectClient.getHealthConnectSettingsAction()))
-    }.onFailure { Toast.makeText(context, "Health Connect 설정을 열 수 없어요", Toast.LENGTH_SHORT).show() }
+    // Android 14 이상: 시스템에 내장된 Health Connect, 13 이하: Health Connect 앱
+    val actions = buildList {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) add("android.health.connect.action.HEALTH_HOME_SETTINGS")
+        add(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)
+    }
+    val opened = actions.any { action ->
+        runCatching { context.startActivity(Intent(action)) }.isSuccess
+    }
+    if (!opened) Toast.makeText(context, "Health Connect 설정을 열 수 없어요", Toast.LENGTH_SHORT).show()
 }
 
 private val dateFmt = DateTimeFormatter.ofPattern("yyyy.MM.dd")
