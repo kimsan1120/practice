@@ -109,14 +109,32 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
         }
     }
 
-    BackHandler(enabled = state.detail != null) { vm.closeDetail() }
+    BackHandler(enabled = state.detail != null || state.showSettings) {
+        if (state.showSettings) vm.openSettings(false) else vm.closeDetail()
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (state.detail != null) "기록 상세" else "러닝 기록 내보내기") },
+                title = {
+                    Text(
+                        when {
+                            state.showSettings -> "설정"
+                            state.detail != null -> "기록 상세"
+                            else -> "러닝 기록 내보내기"
+                        }
+                    )
+                },
                 navigationIcon = {
-                    if (state.detail != null) TextButton(onClick = vm::closeDetail) { Text("← 목록") }
+                    when {
+                        state.showSettings -> TextButton(onClick = { vm.openSettings(false) }) { Text("← 닫기") }
+                        state.detail != null -> TextButton(onClick = vm::closeDetail) { Text("← 목록") }
+                    }
+                },
+                actions = {
+                    if (!state.showSettings && state.hasPermission) {
+                        TextButton(onClick = { vm.openSettings(true) }) { Text("설정") }
+                    }
                 },
             )
         },
@@ -129,12 +147,28 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                 !state.hasPermission -> PermissionScreen(
                     onRequest = { permissionLauncher.launch(vm.permissionsToRequest()) },
                 )
-                state.detail != null -> DetailScreen(
-                    detail = state.detail,
-                    onRequestRoute = { routeLauncher.launch(state.detail.summary.id) },
-                    onShare = { Exporter.share(context, Exporter.filesForRun(state.detail)) },
-                    onSave = { saveAndReport(context, vm, Exporter.filesForRun(state.detail)) },
+                state.showSettings -> SettingsScreen(
+                    profile = state.profile,
+                    onSave = vm::saveProfile,
+                    onOpenHealthConnect = { openHealthConnectSettings(context) },
                 )
+                state.detail != null && state.analysis != null -> {
+                    val bundle = ExportBundle(state.detail, state.analysis, state.notes, state.weather, state.profile)
+                    DetailScreen(
+                        bundle = bundle,
+                        weatherLoading = state.weatherLoading,
+                        onRequestRoute = { routeLauncher.launch(state.detail.summary.id) },
+                        onOpenHealthConnect = { openHealthConnectSettings(context) },
+                        onNotesChange = vm::updateNotes,
+                        onFetchWeather = vm::fetchWeather,
+                        onShare = { Exporter.share(context, Exporter.filesForRun(bundle)) },
+                        onSave = { saveAndReport(context, vm, Exporter.filesForRun(bundle)) },
+                        onCopy = {
+                            Exporter.copyToClipboard(context, Exporter.analysisText(bundle))
+                            vm.showMessage("분석용 텍스트를 복사했어요. 채팅창에 붙여넣기 하세요.")
+                        },
+                    )
+                }
                 else -> ListScreen(
                     state = state,
                     onPrev = { vm.shiftDate(-1) },
@@ -207,7 +241,7 @@ private fun PermissionScreen(onRequest: () -> Unit) {
     }
 }
 
-private fun openHealthConnectSettings(context: Context) {
+fun openHealthConnectSettings(context: Context) {
     // Android 14 이상: 시스템에 내장된 Health Connect, 13 이하: Health Connect 앱
     val actions = buildList {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) add("android.health.connect.action.HEALTH_HOME_SETTINGS")
@@ -327,147 +361,3 @@ private fun Big(value: String, label: String) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
-
-@Composable
-private fun DetailScreen(
-    detail: RunDetail,
-    onRequestRoute: () -> Unit,
-    onShare: () -> Unit,
-    onSave: () -> Unit,
-) {
-    val s = detail.summary
-    val context = LocalContext.current
-    val stats = listOf(
-        "거리" to formatKm(s.distanceMeters),
-        "운동 시간" to formatDuration(s.activeDuration),
-        "평균 페이스" to "${formatPace(s.paceSecPerKm)} /km",
-        "평균 속도" to "${fmt1(s.avgSpeedKmh)} km/h",
-        "평균 심박" to "${s.avgHr ?: "-"} bpm",
-        "최고 심박" to "${s.maxHr ?: "-"} bpm",
-        "최저 심박" to "${s.minHr ?: "-"} bpm",
-        "최고 속도" to "${fmt1(s.maxSpeedKmh)} km/h",
-        "칼로리 (총)" to "${fmt0(s.totalKcal)} kcal",
-        "칼로리 (활동)" to "${fmt0(s.activeKcal)} kcal",
-        "걸음 수" to (s.steps?.toString() ?: "-"),
-        "케이던스" to "${fmt0(s.cadenceSpm)} spm",
-        "상승 고도" to "${fmt1(s.elevationGainM)} m",
-    )
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            Text(s.title ?: s.typeName, style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "${s.start.localDateTime()} ~ ${s.end.localTime()} · 출처: ${appLabel(context, s.sourcePackage)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        item {
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    stats.chunked(2).forEach { row ->
-                        Row(Modifier.fillMaxWidth()) {
-                            row.forEach { (label, value) ->
-                                Column(Modifier.weight(1f)) {
-                                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            if (row.size == 1) Spacer(Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onShare, modifier = Modifier.weight(1f)) { Text("전체 공유") }
-                OutlinedButton(onClick = onSave, modifier = Modifier.weight(1f)) { Text("다운로드에 저장") }
-            }
-            Text(
-                "요약·원본 샘플 CSV${if (detail.splits.isNotEmpty()) " + 구간 CSV" else ""}" +
-                    "${if (detail.laps.isNotEmpty()) " + 랩 CSV" else ""}${if (detail.route.isNotEmpty()) " + GPX" else ""} 파일이 만들어져요.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-        item {
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("GPS 경로", style = MaterialTheme.typography.titleSmall)
-                    when (detail.routeState) {
-                        RouteState.AVAILABLE -> Text("GPS 포인트 ${detail.route.size}개 (GPX 로 내보내기 가능)")
-                        RouteState.CONSENT_REQUIRED -> {
-                            Text("경로는 기록마다 따로 허락을 받아야 해요.", style = MaterialTheme.typography.bodySmall)
-                            Button(onClick = onRequestRoute) { Text("GPS 경로 불러오기") }
-                        }
-                        RouteState.NONE -> Text("이 기록에는 Health Connect 에 저장된 경로가 없어요.", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Text(
-                        "심박 샘플 ${detail.heartRate.size}개 · 속도 샘플 ${detail.speed.size}개",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-        if (detail.splits.isNotEmpty()) {
-            item {
-                Text("1km 구간 (기준: ${detail.splitSource})", style = MaterialTheme.typography.titleSmall)
-                Text("구간 시간에는 일시정지 시간이 포함될 수 있어요.", style = MaterialTheme.typography.bodySmall)
-            }
-            item { SplitRow("구간", "시간", "페이스", "심박", header = true) }
-            items(detail.splits) { sp ->
-                SplitRow(
-                    if (sp.distanceM >= 999) "${sp.index} km" else "+${fmt0(sp.distanceM)} m",
-                    formatDuration(sp.duration),
-                    formatPace(sp.paceSecPerKm),
-                    sp.avgHr?.toString() ?: "-",
-                )
-            }
-        } else {
-            item {
-                Text(
-                    "구간을 계산할 데이터(경로·거리·속도 기록)가 부족해요." +
-                        if (detail.routeState == RouteState.CONSENT_REQUIRED) " GPS 경로를 불러오면 계산돼요." else "",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        }
-        if (detail.laps.isNotEmpty()) {
-            item { Text("워치 랩 기록", style = MaterialTheme.typography.titleSmall) }
-            items(detail.laps) { lap ->
-                SplitRow(
-                    "랩 ${lap.index}",
-                    formatDuration(java.time.Duration.between(lap.start, lap.end)),
-                    lap.lengthM?.let { "${fmt0(it)} m" } ?: "-",
-                    "",
-                )
-            }
-        }
-        item { Spacer(Modifier.height(24.dp)) }
-    }
-}
-
-@Composable
-private fun SplitRow(a: String, b: String, c: String, d: String, header: Boolean = false) {
-    val style = if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodyMedium
-    val weight = if (header) FontWeight.Bold else FontWeight.Normal
-    Column {
-        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            Text(a, Modifier.weight(1f), style = style, fontWeight = weight)
-            Text(b, Modifier.weight(1f), style = style, fontWeight = weight)
-            Text(c, Modifier.weight(1f), style = style, fontWeight = weight)
-            Text(d, Modifier.width(56.dp), style = style, fontWeight = weight)
-        }
-        HorizontalDivider()
-    }
-}
-
-private fun appLabel(context: Context, pkg: String): String = runCatching {
-    val pm = context.packageManager
-    pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-}.getOrElse { if (pkg == "com.sec.android.app.shealth") "Samsung Health" else pkg }

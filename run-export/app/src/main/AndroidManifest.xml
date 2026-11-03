@@ -10,6 +10,14 @@
     <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
     <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
     <uses-permission android:name="android.permission.health.READ_ELEVATION_GAINED" />
+    <uses-permission android:name="android.permission.health.READ_VO2_MAX" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_WEIGHT" />
+    <!-- GPS 경로를 기록마다 묻지 않고 읽기 (Health Connect 설정에서 '항상 허용' 했을 때) -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE_ROUTES" />
+
+    <!-- 기온 가져오기 (Open-Meteo). 버튼을 누를 때만 사용 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- 권한을 준 시점보다 30일 이상 지난 기록 읽기 (지원되는 기기에서만 요청) -->
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
 

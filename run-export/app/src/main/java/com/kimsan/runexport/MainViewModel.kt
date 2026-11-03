@@ -22,15 +22,22 @@ data class UiState(
     val loading: Boolean = false,
     val sessions: List<RunSummary> = emptyList(),
     val detail: RunDetail? = null,
+    val analysis: RunAnalysis? = null,
+    val notes: RunNotes = RunNotes(),
+    val weather: WeatherInfo? = null,
+    val weatherLoading: Boolean = false,
     val detailLoading: Boolean = false,
+    val showSettings: Boolean = false,
+    val profile: Profile = Profile(),
     val message: String? = null,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = HealthRepository(app)
+    private val prefs = Prefs(app)
 
-    var state by mutableStateOf(UiState())
+    var state by mutableStateOf(UiState(profile = prefs.profile()))
         private set
 
     private var loadJob: Job? = null
@@ -89,7 +96,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             state = state.copy(detailLoading = true)
             try {
-                state = state.copy(detail = repo.readDetail(summary), detailLoading = false)
+                val d = repo.readDetail(summary)
+                setDetail(d)
+                state = state.copy(
+                    detailLoading = false,
+                    notes = prefs.notes(summary.id),
+                    weather = prefs.weather(summary.id),
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -98,8 +111,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun setDetail(d: RunDetail) {
+        state = state.copy(detail = d, analysis = Analysis.analyze(d, state.profile))
+    }
+
     fun closeDetail() {
-        state = state.copy(detail = null)
+        state = state.copy(detail = null, analysis = null)
     }
 
     fun onRouteResult(route: ExerciseRoute?) {
@@ -108,7 +125,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             state = state.copy(message = "GPS 경로를 받지 못했어요 (거부했거나 경로가 없는 기록이에요)")
             return
         }
-        state = state.copy(detail = HealthRepository.withRoute(d, route), message = "GPS 포인트 ${route.route.size}개를 불러왔어요")
+        setDetail(HealthRepository.withRoute(d, route))
+        state = state.copy(message = "GPS 포인트 ${route.route.size}개를 불러왔어요")
+    }
+
+    fun updateNotes(n: RunNotes) {
+        val id = state.detail?.summary?.id ?: return
+        prefs.saveNotes(id, n)
+        state = state.copy(notes = n)
+    }
+
+    fun fetchWeather() {
+        val d = state.detail ?: return
+        val p = d.route.firstOrNull() ?: run {
+            state = state.copy(message = "기온을 가져오려면 먼저 GPS 경로를 불러와야 해요")
+            return
+        }
+        viewModelScope.launch {
+            state = state.copy(weatherLoading = true)
+            try {
+                val w = Weather.fetch(p.lat, p.lon, d.summary.start, d.summary.end)
+                prefs.saveWeather(d.summary.id, w)
+                state = state.copy(weather = w, weatherLoading = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                state = state.copy(weatherLoading = false, message = "기온 가져오기 실패: ${e.message}")
+            }
+        }
+    }
+
+    fun openSettings(show: Boolean) {
+        state = state.copy(showSettings = show)
+    }
+
+    fun saveProfile(p: Profile) {
+        prefs.saveProfile(p)
+        state = state.copy(profile = p, showSettings = false, message = "설정을 저장했어요")
+        state.detail?.let { setDetail(it) }
     }
 
     fun showMessage(msg: String) {

@@ -17,7 +17,25 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
 
-/** CSV / GPX 파일 만들기 + 공유 / 다운로드 폴더 저장 */
+/** 기록 하나를 내보낼 때 필요한 것 전부 */
+data class ExportBundle(
+    val detail: RunDetail,
+    val analysis: RunAnalysis,
+    val notes: RunNotes,
+    val weather: WeatherInfo?,
+    val profile: Profile,
+) {
+    val restingHr: Long? get() = notes.restingHr?.toLong() ?: detail.restingHr
+    val weightKg: Double? get() = detail.weightKg ?: profile.weightKg
+
+    fun weightText(): String = when {
+        detail.weightKg != null -> "${fmt1(detail.weightKg)} kg (Health Connect)"
+        profile.weightKg != null -> "${fmt1(profile.weightKg)} kg (설정값)"
+        else -> "-"
+    }
+}
+
+/** CSV / GPX / 분석 텍스트 만들기 + 공유 / 다운로드 폴더 저장 */
 object Exporter {
 
     data class ExportFile(val name: String, val mime: String, val content: String)
@@ -31,17 +49,89 @@ object Exporter {
         ExportFile("runs_${date.toString().replace("-", "")}_summary.csv", "text/csv", summaryCsv(runs))
     )
 
-    fun filesForRun(d: RunDetail): List<ExportFile> {
+    fun filesForRun(b: ExportBundle): List<ExportFile> {
+        val d = b.detail
         val stamp = fileStamp.format(d.summary.start.atZone(ZoneId.systemDefault()))
         val base = "run_$stamp"
         val files = mutableListOf(
+            ExportFile("${base}_analysis.txt", "text/plain", analysisText(b)),
             ExportFile("${base}_summary.csv", "text/csv", summaryCsv(listOf(d.summary))),
-            ExportFile("${base}_samples.csv", "text/csv", samplesCsv(d)),
+            ExportFile("${base}_samples.csv", "text/csv", samplesCsv(b)),
         )
         if (d.splits.isNotEmpty()) files += ExportFile("${base}_splits.csv", "text/csv", splitsCsv(d))
+        if (b.analysis.zones5.isNotEmpty()) files += ExportFile("${base}_hr_zones.csv", "text/csv", zonesCsv(b.analysis))
         if (d.laps.isNotEmpty()) files += ExportFile("${base}_laps.csv", "text/csv", lapsCsv(d))
+        if (d.vo2History.isNotEmpty()) files += ExportFile("vo2max_history.csv", "text/csv", vo2Csv(d))
         if (d.route.isNotEmpty()) files += ExportFile("$base.gpx", "application/gpx+xml", gpx(d))
         return files
+    }
+
+    // ---------- 분석용 텍스트 (채팅에 붙여넣기 좋게) ----------
+
+    fun analysisText(b: ExportBundle): String = buildString {
+        val d = b.detail
+        val s = d.summary
+        val a = b.analysis
+        val z = s.start.atZone(ZoneId.systemDefault())
+        val dow = z.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, Locale.KOREAN)
+        appendLine("[러닝 기록] ${z.toLocalDate()} ($dow) ${s.start.localTime()}~${s.end.localTime()} · ${s.title ?: s.typeName}")
+        b.weather?.let { appendLine("기온: ${weatherText(it)}") }
+        val cond = listOfNotNull(
+            b.notes.rpe?.let { "체감 난이도 $it/10" },
+            b.notes.memo.takeIf { it.isNotBlank() }?.let { "메모: $it" },
+        )
+        if (cond.isNotEmpty()) appendLine(cond.joinToString(" · "))
+        val body = listOfNotNull(
+            b.weightKg?.let { "체중 ${fmt1(it)}kg" },
+            b.restingHr?.let { "안정시 심박 ${it}bpm" },
+        )
+        if (body.isNotEmpty()) appendLine(body.joinToString(" · "))
+        appendLine()
+
+        appendLine("■ 상세정보")
+        detailStats(b).forEach { (k, v) -> if (!v.startsWith("-")) appendLine("- $k: $v") }
+        appendLine()
+
+        if (d.splits.isNotEmpty()) {
+            appendLine("■ 구간기록 (기준: ${d.splitSource})")
+            d.splits.forEach { sp ->
+                val label = if (sp.distanceM >= 999) "${sp.index}km" else "+${fmt0(sp.distanceM)}m"
+                val star = if (sp == a.fastestSplit) " ★가장 빠름" else ""
+                appendLine("- $label ${formatDuration(sp.duration)} · ${formatPace(sp.paceSecPerKm)}/km · 심박 ${sp.avgHr ?: "-"}$star")
+            }
+            appendLine()
+        }
+
+        if (a.zones5.isNotEmpty()) {
+            appendLine("■ 심박수 구간 (최대 심박 ${a.maxHrUsed}, ${a.maxHrSource})")
+            a.zones5.forEach { appendLine("- ${it.name} ${zoneRange(it)}: ${formatDuration(Duration.ofSeconds(it.seconds))} (${(it.fraction * 100).toInt()}%)") }
+            appendLine()
+        }
+        if (a.zones3.isNotEmpty()) {
+            appendLine("■ 역치 기준 3구간 (유산소 ${b.profile.aerobicThreshold} / 무산소 ${b.profile.anaerobicThreshold})")
+            a.zones3.forEach { appendLine("- ${it.name} ${zoneRange(it)}: ${formatDuration(Duration.ofSeconds(it.seconds))} (${(it.fraction * 100).toInt()}%)") }
+            appendLine()
+        }
+        a.recovery?.let { r ->
+            appendLine("■ 회복 심박")
+            appendLine(
+                "- 종료 시 ${r.atEnd ?: "-"} → 1분 후 ${r.after1Min ?: "-"}${r.drop1?.let { " (−$it)" } ?: ""}" +
+                    " → 2분 후 ${r.after2Min ?: "-"}${r.drop2?.let { " (−$it)" } ?: ""}"
+            )
+            appendLine()
+        }
+        if (d.vo2History.size >= 2) {
+            appendLine("■ VO2max 추이 (최근 ${d.vo2History.size}회)")
+            d.vo2History.takeLast(8).forEach { appendLine("- ${it.time.localDateTime().take(10)}: ${fmt1(it.value)}") }
+            appendLine()
+        }
+        appendLine("■ 데이터 상태")
+        appendLine(d.diagnostics.drop(2).joinToString(" · ") { "${it.label} ${it.value}" })
+    }
+
+    fun copyToClipboard(context: Context, text: String) {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("러닝 기록", text))
     }
 
     // ---------- CSV ----------
@@ -92,26 +182,44 @@ object Exporter {
         }
     }
 
-    /** 시각별 원시 데이터: 심박 / 속도 / GPS 를 시각 기준으로 합친 표 */
-    fun samplesCsv(d: RunDetail): String = buildString {
+    /** 시각별 원시 데이터: 심박 / 속도 / 페이스 / 케이던스 / GPS 를 시각 기준으로 합친 표 */
+    fun samplesCsv(b: ExportBundle): String = buildString {
+        val d = b.detail
         append(BOM)
-        line("시각", "경과(초)", "심박(bpm)", "속도(km/h)", "위도", "경도", "고도(m)")
+        line("시각", "경과(초)", "심박(bpm)", "속도(km/h)", "페이스(/km)", "케이던스(spm)", "위도", "경도", "고도(m)")
         val hr = d.heartRate.associateBy { it.time }
-        val sp = d.speed.associateBy { it.time }
+        val sp = Analysis.speedSeries(d).associateBy { it.time }
+        val cad = Analysis.cadenceSeries(d).associateBy { it.time }
         val rt = d.route.associateBy { it.time }
-        val times = (hr.keys + sp.keys + rt.keys).toSortedSet()
+        val times = (hr.keys + sp.keys + cad.keys + rt.keys).toSortedSet()
         for (t in times) {
             val p = rt[t]
+            val kmh = sp[t]?.value
             line(
                 t.localDateTime(),
                 (Duration.between(d.summary.start, t).toMillis() / 1000.0).let { String.format(Locale.US, "%.0f", it) },
                 hr[t]?.bpm?.toString() ?: "",
-                sp[t]?.kmh?.let { String.format(Locale.US, "%.2f", it) } ?: "",
+                kmh?.let { String.format(Locale.US, "%.2f", it) } ?: "",
+                kmh?.takeIf { it >= 3 }?.let { formatPace(3600 / it) } ?: "",
+                cad[t]?.value?.let { String.format(Locale.US, "%.0f", it) } ?: "",
                 p?.lat?.let { String.format(Locale.US, "%.7f", it) } ?: "",
                 p?.lon?.let { String.format(Locale.US, "%.7f", it) } ?: "",
                 p?.altitudeM?.let { String.format(Locale.US, "%.1f", it) } ?: "",
             )
         }
+    }
+
+    fun zonesCsv(a: RunAnalysis): String = buildString {
+        append(BOM)
+        line("기준", "구간", "심박 범위", "시간", "시간(초)", "비율(%)")
+        for (z in a.zones5) line("최대심박 ${a.maxHrUsed}", z.name, zoneRange(z), formatDuration(Duration.ofSeconds(z.seconds)), z.seconds.toString(), fmt1(z.fraction * 100))
+        for (z in a.zones3) line("역치", z.name, zoneRange(z), formatDuration(Duration.ofSeconds(z.seconds)), z.seconds.toString(), fmt1(z.fraction * 100))
+    }
+
+    fun vo2Csv(d: RunDetail): String = buildString {
+        append(BOM)
+        line("측정 시각", "VO2max(ml/kg/min)")
+        for (v in d.vo2History) line(v.time.localDateTime(), fmt1(v.value))
     }
 
     // ---------- GPX (Strava 등에 올릴 수 있는 형식, 심박 포함) ----------

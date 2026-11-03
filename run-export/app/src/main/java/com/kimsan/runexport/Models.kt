@@ -50,13 +50,27 @@ data class HrPoint(val time: Instant, val bpm: Long)
 data class SpeedPoint(val time: Instant, val kmh: Double)
 data class RoutePoint(val time: Instant, val lat: Double, val lon: Double, val altitudeM: Double?)
 
+data class CadencePoint(val time: Instant, val spm: Double)
+data class StepsInterval(val start: Instant, val end: Instant, val count: Long)
+data class Vo2Point(val time: Instant, val value: Double)
+
 /** 1km 구간 기록 */
-data class Split(val index: Int, val distanceM: Double, val duration: Duration, val avgHr: Long?) {
+data class Split(
+    val index: Int,
+    val distanceM: Double,
+    val duration: Duration,
+    val avgHr: Long?,
+    val start: Instant,
+    val end: Instant,
+) {
     val paceSecPerKm: Double? get() = if (distanceM > 0) duration.seconds / (distanceM / 1000.0) else null
 }
 
 /** 워치에서 기록한 랩 (있을 때만) */
 data class LapInfo(val index: Int, val start: Instant, val end: Instant, val lengthM: Double?)
+
+/** Health Connect 에 어떤 데이터가 몇 개 들어왔는지 (데이터 진단) */
+data class DiagItem(val label: String, val value: String)
 
 /** 운동 1회의 상세 데이터 */
 data class RunDetail(
@@ -68,6 +82,53 @@ data class RunDetail(
     val splits: List<Split>,
     val splitSource: String,
     val laps: List<LapInfo>,
+    val cadence: List<CadencePoint> = emptyList(),
+    val stepsIntervals: List<StepsInterval> = emptyList(),
+    /** 운동 종료 후 3분 동안의 심박 */
+    val recoveryHr: List<HrPoint> = emptyList(),
+    /** 이 운동에 가장 가까운 VO2max 측정값 */
+    val vo2Max: Vo2Point? = null,
+    /** 최근 VO2max 추이 */
+    val vo2History: List<Vo2Point> = emptyList(),
+    /** 그날 안정시 심박 (Health Connect) */
+    val restingHr: Long? = null,
+    /** 운동 직전 최근 체중 (Health Connect) */
+    val weightKg: Double? = null,
+    val diagnostics: List<DiagItem> = emptyList(),
+)
+
+enum class Sex { MALE, FEMALE }
+
+/** 사용자 프로필 (설정 화면) */
+data class Profile(
+    val birthYear: Int? = null,
+    val sex: Sex? = null,
+    val maxHr: Int? = null,
+    /** 유산소 역치 심박 */
+    val aerobicThreshold: Int? = null,
+    /** 무산소 역치 심박 */
+    val anaerobicThreshold: Int? = null,
+    val weightKg: Double? = null,
+) {
+    fun ageAt(year: Int): Int? = birthYear?.let { year - it }
+}
+
+/** 기록별 직접 입력값 */
+data class RunNotes(
+    /** 체감 난이도 1~10 */
+    val rpe: Int? = null,
+    val memo: String = "",
+    /** 아침 안정시 심박 직접 입력 */
+    val restingHr: Int? = null,
+)
+
+/** 운동 시각의 날씨 (Open-Meteo) */
+data class WeatherInfo(
+    val tempC: Double,
+    val apparentC: Double?,
+    val humidity: Double?,
+    val windKmh: Double?,
+    val hourLabel: String,
 )
 
 // ---------- 포맷 도우미 ----------

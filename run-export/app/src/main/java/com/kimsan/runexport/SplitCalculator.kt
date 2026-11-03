@@ -85,7 +85,7 @@ object SplitCalculator {
                 val frac = (target - a.meters) / (b.meters - a.meters)
                 val spanMs = Duration.between(a.time, b.time).toMillis()
                 val t = a.time.plusMillis((spanMs * frac).toLong())
-                splits += Split(splits.size + 1, splitMeters, Duration.between(boundaryTime, t), avgHr(hr, boundaryTime, t))
+                splits += Split(splits.size + 1, splitMeters, Duration.between(boundaryTime, t), avgHr(hr, boundaryTime, t), boundaryTime, t)
                 boundaryTime = t
                 target += splitMeters
             }
@@ -93,7 +93,7 @@ object SplitCalculator {
         val rest = tl.last().meters - (target - splitMeters)
         if (rest >= 50) {
             val end = tl.last().time
-            splits += Split(splits.size + 1, rest, Duration.between(boundaryTime, end), avgHr(hr, boundaryTime, end))
+            splits += Split(splits.size + 1, rest, Duration.between(boundaryTime, end), avgHr(hr, boundaryTime, end), boundaryTime, end)
         }
         return splits
     }
