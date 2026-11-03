@@ -95,6 +95,14 @@ data class RunDetail(
     /** 운동 직전 최근 체중 (Health Connect) */
     val weightKg: Double? = null,
     val diagnostics: List<DiagItem> = emptyList(),
+    /** 페이스 계산 근거용: Health Connect 운동 시간 집계 */
+    val durationAggregated: Duration? = null,
+    /** 일시정지/휴식 세그먼트 합계(초) */
+    val pauseSeconds: Long = 0,
+    /** 모든 앱 기준 거리 집계 */
+    val distanceAllOrigins: Double? = null,
+    /** 세션과 겹치는 거리 기록의 합 */
+    val distanceRecordsSum: Double? = null,
 )
 
 enum class Sex { MALE, FEMALE }

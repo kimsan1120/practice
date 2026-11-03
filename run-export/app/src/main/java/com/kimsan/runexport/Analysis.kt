@@ -32,6 +32,9 @@ data class Recovery(
     val drop2: Long? get() = if (atEnd != null && after2Min != null) atEnd - after2Min else null
 }
 
+/** 평균 페이스 계산 근거: (이름, 값) */
+data class PaceBasis(val label: String, val duration: Duration?, val distanceM: Double?)
+
 /** 화면/내보내기에 쓰는 계산 결과 묶음 */
 data class RunAnalysis(
     val totalTime: Duration,
@@ -101,6 +104,39 @@ object Analysis {
             vo2Grade = d.vo2Max?.let { v -> if (age != null && profile.sex != null) vo2Grade(v.value, age, profile.sex) else null },
             age = age,
         )
+    }
+
+    // ---------- 평균 페이스 계산 근거 ----------
+
+    /** 실제로 움직인 시간: 속도 2km/h 이상인 구간 합 (샘플 간격 최대 10초) */
+    fun movingTime(speedKmh: List<TimeValue>): Duration? {
+        if (speedKmh.size < 3) return null
+        var ms = 0L
+        for (i in 1 until speedKmh.size) {
+            if (speedKmh[i].value < 2.0) continue
+            ms += min(Duration.between(speedKmh[i - 1].time, speedKmh[i].time).toMillis(), 10_000L).coerceAtLeast(0)
+        }
+        return Duration.ofMillis(ms)
+    }
+
+    /** 시간 후보와 거리 후보 (삼성 헬스 값과 비교용) */
+    fun paceBases(d: RunDetail): Pair<List<PaceBasis>, List<PaceBasis>> {
+        val s = d.summary
+        val span = Duration.between(s.start, s.end)
+        val times = listOf(
+            PaceBasis("시작~종료 (총 시간)", span, null),
+            PaceBasis("Health Connect 운동 시간 집계", d.durationAggregated, null),
+            PaceBasis("일시정지 구간 제외", if (d.pauseSeconds > 0) span.minusSeconds(d.pauseSeconds) else null, null),
+            PaceBasis("움직인 시간 (2km/h 이상)", movingTime(speedSeries(d)), null),
+        )
+        val routeM = if (d.route.size >= 2) SplitCalculator.fromRoute(d.route).last().meters else null
+        val dists = listOf(
+            PaceBasis("거리 집계 (세션 앱)", null, s.distanceMeters),
+            PaceBasis("거리 집계 (모든 앱)", null, d.distanceAllOrigins),
+            PaceBasis("거리 기록 합계", null, d.distanceRecordsSum),
+            PaceBasis("GPS 경로 거리", null, routeM),
+        )
+        return times to dists
     }
 
     // ---------- 속도 / 페이스 ----------

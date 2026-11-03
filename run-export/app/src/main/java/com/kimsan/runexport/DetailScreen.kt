@@ -252,6 +252,8 @@ fun DetailScreen(
             Section("데이터 진단 (Health Connect 에 들어온 것)") {
                 d.diagnostics.forEach { TableRow(it.label, it.value, "", "", wide = true) }
                 Note("여기서 0개 / 없음 인 항목은 삼성 헬스가 Health Connect 로 넘기지 않는 데이터예요.")
+                Spacer(Modifier.height(10.dp))
+                PaceBasisTable(d)
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
@@ -357,6 +359,28 @@ fun weatherText(w: WeatherInfo): String = buildString {
     w.humidity?.let { append(" · 습도 ${fmt0(it)}%") }
     w.windKmh?.let { append(" · 바람 ${fmt0(it)} km/h") }
     append(" · ${w.hourLabel} 기준")
+}
+
+/** 평균 페이스가 삼성 헬스와 다를 때 원인을 찾기 위한 표 */
+@Composable
+private fun PaceBasisTable(d: RunDetail) {
+    val (times, dists) = Analysis.paceBases(d)
+    val s = d.summary
+    Text("평균 페이스 계산 근거", style = MaterialTheme.typography.labelLarge)
+    Note("앱의 평균 페이스 = ${formatDuration(s.activeDuration)} ÷ ${formatKm(s.distanceMeters)} = ${formatPace(s.paceSecPerKm)}/km")
+    TableRow("시간 후보", "값", "페이스*", "", header = true)
+    times.forEach { t ->
+        val pace = if (t.duration != null && s.distanceMeters != null && s.distanceMeters > 10)
+            t.duration.seconds / (s.distanceMeters / 1000) else null
+        TableRow(t.label, t.duration?.let { formatDuration(it) } ?: "-", formatPace(pace), "")
+    }
+    Note("* 페이스 = 시간 후보 ÷ 앱의 거리(${formatKm(s.distanceMeters)})")
+    TableRow("거리 후보", "값", "페이스**", "", header = true)
+    dists.forEach { x ->
+        val pace = x.distanceM?.takeIf { it > 10 }?.let { s.activeDuration.seconds / (it / 1000) }
+        TableRow(x.label, formatKm(x.distanceM), formatPace(pace), "")
+    }
+    Note("** 페이스 = 앱의 운동 시간(${formatDuration(s.activeDuration)}) ÷ 거리 후보. 삼성 헬스의 운동 시간·거리와 같은 줄을 알려주시면 그 기준으로 맞출게요.")
 }
 
 // ---------- 공통 조각 ----------

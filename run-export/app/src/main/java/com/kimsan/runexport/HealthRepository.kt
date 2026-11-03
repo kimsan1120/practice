@@ -9,6 +9,7 @@ import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ElevationGainedRecord
+import androidx.health.connect.client.records.ExerciseSegment
 import androidx.health.connect.client.records.ExerciseRoute
 import androidx.health.connect.client.records.ExerciseRouteResult
 import androidx.health.connect.client.records.ExerciseSessionRecord
@@ -130,10 +131,27 @@ class HealthRepository(private val context: Context) {
                 .sortedBy { it.time }
         } else emptyList()
 
-        val distanceRecords = if (has(granted, DistanceRecord::class)) {
-            readPreferOrigin(DistanceRecord::class, start, end, origin)
-                .map { it.endTime to it.distance.inMeters }
-        } else emptyList()
+        val hasDistance = has(granted, DistanceRecord::class)
+        val rawDistance = if (hasDistance) readPreferOrigin(DistanceRecord::class, start, end, origin) else emptyList()
+        val distanceRecords = rawDistance.map { it.endTime to it.distance.inMeters }
+        // 세션 시간과 겹치는 만큼만 비례해서 더한 거리 기록 합계
+        val distanceRecordsSum = if (rawDistance.isEmpty()) null else rawDistance.sumOf { r ->
+            val span = Duration.between(r.startTime, r.endTime).toMillis().coerceAtLeast(1)
+            val ovStart = maxOf(r.startTime, start)
+            val ovEnd = minOf(r.endTime, end)
+            val ov = Duration.between(ovStart, ovEnd).toMillis().coerceAtLeast(0)
+            r.distance.inMeters * ov / span
+        }
+        // 모든 앱 기준 거리 집계 (세션 앱 기준은 summary.distanceMeters)
+        val distanceAll = if (hasDistance) aggregateOrNull(
+            setOf(DistanceRecord.DISTANCE_TOTAL), TimeRangeFilter.between(start, end), emptySet()
+        )?.get(DistanceRecord.DISTANCE_TOTAL)?.inMeters else null
+        val durationAgg = aggregateOrNull(
+            setOf(ExerciseSessionRecord.EXERCISE_DURATION_TOTAL), TimeRangeFilter.between(start, end), origin
+        )?.get(ExerciseSessionRecord.EXERCISE_DURATION_TOTAL)
+        val pauseTypes = setOf(ExerciseSegment.EXERCISE_SEGMENT_TYPE_PAUSE, ExerciseSegment.EXERCISE_SEGMENT_TYPE_REST)
+        val pauseSeconds = session.segments.filter { it.segmentType in pauseTypes }
+            .sumOf { Duration.between(it.startTime, it.endTime).seconds }
 
         val routeResult = session.exerciseRouteResult
         val route = (routeResult as? ExerciseRouteResult.Data)?.exerciseRoute?.toPoints().orEmpty()
@@ -228,6 +246,10 @@ class HealthRepository(private val context: Context) {
             restingHr = resting.firstOrNull()?.beatsPerMinute,
             weightKg = weight?.weight?.inKilograms,
             diagnostics = diag,
+            durationAggregated = durationAgg,
+            pauseSeconds = pauseSeconds,
+            distanceAllOrigins = distanceAll,
+            distanceRecordsSum = distanceRecordsSum,
         )
         return computeSplits(base, distanceRecords)
     }
