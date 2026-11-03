@@ -48,7 +48,11 @@ fun SettingsScreen(profile: Profile, onSave: (Profile) -> Unit, onOpenHealthConn
         }
 
         NumberField("최대 심박 (비우면 220 − 나이)", maxHr, 3) { maxHr = it }
-        Text("심박 5구간: Z1 <60%, Z2 60–70%, Z3 70–80%, Z4 80–90%, Z5 90%+ (최대 심박 기준)", style = MaterialTheme.typography.bodySmall)
+        Text(
+            "심박 5구간은 삼성 헬스와 같은 방식: 구간 1 = 50–60%, 2 = 60–70%, 3 = 70–80%, 4 = 80–90%, 5 = 90% 이상. " +
+                "삼성 헬스 '심박수 구간' 화면의 최대 심박(예: 186)을 넣으면 경계가 똑같아져요.",
+            style = MaterialTheme.typography.bodySmall,
+        )
 
         NumberField("유산소 역치 심박 (예: 131)", aet, 3) { aet = it }
         NumberField("무산소 역치 심박 (예: 173)", ant, 3) { ant = it }

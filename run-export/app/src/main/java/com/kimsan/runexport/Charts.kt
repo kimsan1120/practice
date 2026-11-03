@@ -172,7 +172,7 @@ fun ZoneBars(zones: List<Zone>) {
 }
 
 fun zoneRange(z: Zone): String = when {
-    z.fromBpm == null -> "< ${z.toBpm!! + 1} bpm"
     z.toBpm == null -> "${z.fromBpm}+ bpm"
+    z.fromBpm == null || z.fromBpm <= 0 -> "≤ ${z.toBpm} bpm"
     else -> "${z.fromBpm}–${z.toBpm} bpm"
 }

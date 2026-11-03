@@ -82,12 +82,13 @@ object Analysis {
             // 최고 페이스 = 최고 속도 (삼성 헬스와 같은 방식), 없으면 10초 평균 속도 최댓값
             maxPaceSecPerKm = s.maxSpeedKmh?.takeIf { it in 3.0..30.0 }?.let { 3600.0 / it } ?: maxPace(speed),
             elevation = elevation(d.route),
-            avgCadence = avgCad ?: s.cadenceSpm,
+            // 평균 케이던스 = 총 걸음 ÷ 운동 시간 (삼성 헬스와 같은 방식), 없으면 시계열 평균
+            avgCadence = s.cadenceSpm ?: avgCad,
             maxCadence = maxCad,
             cadenceSource = when {
-                d.cadence.size >= 3 -> "케이던스 기록"
-                cadence.isNotEmpty() -> "걸음 기록으로 계산"
-                s.cadenceSpm != null -> "총 걸음 ÷ 운동 시간"
+                s.cadenceSpm != null && cadence.isNotEmpty() -> "평균 = 총 걸음 ÷ 운동 시간, 최대 = ${if (d.cadence.size >= 3) "케이던스 기록" else "걸음 기록"} 20초 평균"
+                s.cadenceSpm != null -> "평균 = 총 걸음 ÷ 운동 시간 (시간별 기록이 없어 최대는 계산 불가)"
+                cadence.isNotEmpty() -> if (d.cadence.size >= 3) "케이던스 기록" else "걸음 기록으로 계산"
                 else -> ""
             },
             paceSeries = paceSeries(speed),
@@ -99,7 +100,7 @@ object Analysis {
             maxHrSource = maxHrSource,
             zones5 = maxHr?.let { zones5(hrSamples, s.end, it) }.orEmpty(),
             zones3 = if (profile.aerobicThreshold != null && profile.anaerobicThreshold != null)
-                zones3(hrSamples, s.end, profile.aerobicThreshold, profile.anaerobicThreshold) else emptyList(),
+                zones3(hrSamples, s.end, profile.aerobicThreshold, profile.anaerobicThreshold, maxHr) else emptyList(),
             recovery = recovery(hrSamples, d.recoveryHr, s.end),
             recoverySeries = recoverySeries(hrSamples, d.recoveryHr, s.end),
             vo2Grade = d.vo2Max?.let { v -> if (age != null && profile.sex != null) vo2Grade(v.value, age, profile.sex) else null },
@@ -229,31 +230,46 @@ object Analysis {
 
     // ---------- 심박 구간 ----------
 
-    /** 최대 심박 기준 5구간 (Z1 <60%, Z2 60~70, Z3 70~80, Z4 80~90, Z5 90%+) */
+    /**
+     * 최대 심박 기준 5구간 (삼성 헬스와 같은 방식).
+     * 구간 1 = 50~60%, 2 = 60~70, 3 = 70~80, 4 = 80~90, 5 = 90% 이상 (최대 심박 초과도 5구간).
+     * 경계는 올림 (186 의 70% = 130.2 → 131 부터 구간 3), 50% 미만은 세지 않는다.
+     */
     fun zones5(hr: List<HrPoint>, end: Instant, maxHr: Int): List<Zone> {
-        val b = listOf(0.6, 0.7, 0.8, 0.9).map { (maxHr * it).roundToInt() }
-        return zones(hr, end, b, listOf("Z1 회복", "Z2 지방 연소", "Z3 유산소", "Z4 무산소", "Z5 최대"))
+        val lower = listOf(50, 60, 70, 80, 90).map { pctCeil(maxHr, it) }
+        return zones(hr, end, lower, listOf("구간 1", "구간 2", "구간 3", "구간 4", "구간 5"))
     }
 
-    /** 역치 기준 3구간 (유산소 역치 미만 / 사이 / 무산소 역치 이상) */
-    fun zones3(hr: List<HrPoint>, end: Instant, aet: Int, ant: Int): List<Zone> =
-        zones(hr, end, listOf(aet, ant), listOf("유산소 역치 미만", "역치 사이", "무산소 역치 이상"))
+    /**
+     * 역치 기준 3구간 (삼성 헬스와 같은 방식).
+     * 1구간 = 최대 심박 50% ~ 유산소 역치, 2구간 = 유산소 역치 초과 ~ 무산소 역치, 3구간 = 무산소 역치 초과.
+     */
+    fun zones3(hr: List<HrPoint>, end: Instant, aet: Int, ant: Int, maxHr: Int?): List<Zone> {
+        val floor = maxHr?.let { pctCeil(it, 50) } ?: 0
+        return zones(hr, end, listOf(floor, aet + 1, ant + 1), listOf("1구간 (유산소 역치 이하)", "2구간 (역치 사이)", "3구간 (무산소 역치 초과)"))
+    }
 
-    /** bounds 로 나눈 구간별 시간. 각 샘플은 다음 샘플까지(최대 10초) 유지된 것으로 계산 */
-    fun zones(hr: List<HrPoint>, end: Instant, bounds: List<Int>, names: List<String>): List<Zone> {
-        val secs = LongArray(bounds.size + 1)
+    /** maxHr × pct% 올림 (정수 계산으로 부동소수 오차 방지) */
+    fun pctCeil(maxHr: Int, pct: Int): Int = (maxHr * pct + 99) / 100
+
+    /**
+     * 구간별 시간. lower = 각 구간의 시작 심박 (오름차순), 첫 구간 미만은 제외.
+     * 각 샘플은 다음 샘플까지(최대 10초) 유지된 것으로 계산. 비율은 구간 시간 합계 기준.
+     */
+    fun zones(hr: List<HrPoint>, end: Instant, lower: List<Int>, names: List<String>): List<Zone> {
+        val secs = LongArray(lower.size)
         for (i in hr.indices) {
             val next = hr.getOrNull(i + 1)?.time ?: end
             val dt = min(Duration.between(hr[i].time, next).seconds, 10).coerceAtLeast(0)
-            val z = bounds.count { hr[i].bpm >= it }
-            secs[z] += dt
+            val z = lower.count { hr[i].bpm >= it } - 1
+            if (z >= 0) secs[z] += dt
         }
         val total = secs.sum().coerceAtLeast(1)
         return names.mapIndexed { i, name ->
             Zone(
                 name = name,
-                fromBpm = if (i == 0) null else bounds[i - 1],
-                toBpm = if (i == bounds.size) null else bounds[i] - 1,
+                fromBpm = lower[i],
+                toBpm = if (i == lower.size - 1) null else lower[i + 1] - 1,
                 seconds = secs[i],
                 fraction = secs[i].toDouble() / total,
             )

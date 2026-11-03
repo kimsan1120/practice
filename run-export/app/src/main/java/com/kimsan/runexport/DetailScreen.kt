@@ -160,6 +160,11 @@ fun DetailScreen(
                 } else {
                     Text("최대 심박 ${a.maxHrUsed} 기준 (${a.maxHrSource})", style = MaterialTheme.typography.labelLarge)
                     ZoneBars(a.zones5)
+                    Note(
+                        "구간 합계 ${formatDuration(Duration.ofSeconds(a.zones5.sumOf { it.seconds }))} " +
+                            "(운동 시간 ${formatDuration(s.activeDuration)}) · 구간 1(${a.zones5.first().fromBpm}) 미만과 심박이 비는 시간은 빠져요." +
+                            if (a.maxHrSource != "설정값") " 삼성 헬스와 맞추려면 설정에 삼성 헬스의 최대 심박을 넣으세요." else ""
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
                 if (a.zones3.isEmpty()) {

@@ -13,30 +13,42 @@ class AnalysisTest {
     private fun t(sec: Long) = t0.plusSeconds(sec)
 
     @Test
-    fun `5구간 시간 - 샘플은 다음 샘플까지 유지`() {
-        // maxHr 200 → 경계 120/140/160/180
-        val hr = listOf(HrPoint(t(0), 100), HrPoint(t(10), 130), HrPoint(t(20), 150), HrPoint(t(30), 170), HrPoint(t(40), 190))
-        val zones = Analysis.zones5(hr, t(50), 200)
-        assertEquals(5, zones.size)
-        zones.forEach { assertEquals(10L, it.seconds) }
-        assertEquals(0.2, zones[0].fraction, 1e-9)
-        assertEquals("< 120 bpm", zoneRange(zones[0]))
-        assertEquals("180+ bpm", zoneRange(zones[4]))
-        assertEquals("120–139 bpm", zoneRange(zones[1]))
+    fun `삼성 헬스와 같은 5구간 경계 (최대 심박 186)`() {
+        val z = Analysis.zones5(listOf(HrPoint(t(0), 150)), t(10), 186)
+        assertEquals(listOf("93–111 bpm", "112–130 bpm", "131–148 bpm", "149–167 bpm", "168+ bpm"), z.map { zoneRange(it) })
+    }
+
+    @Test
+    fun `5구간 시간 - 최대 초과는 5구간, 50% 미만은 제외, 비율은 구간 합계 기준`() {
+        // 186 기준: 90 은 제외, 120 → 2구간, 198 → 5구간
+        val hr = listOf(HrPoint(t(0), 90), HrPoint(t(10), 120), HrPoint(t(20), 198))
+        val z = Analysis.zones5(hr, t(30), 186)
+        assertEquals(listOf(0L, 10L, 0L, 0L, 10L), z.map { it.seconds })
+        assertEquals(0.5, z[4].fraction, 1e-9)
     }
 
     @Test
     fun `샘플 간격이 길면 10초까지만 센다`() {
         val hr = listOf(HrPoint(t(0), 150), HrPoint(t(100), 150))
-        val zones = Analysis.zones3(hr, t(100), 131, 173)
+        val zones = Analysis.zones3(hr, t(100), 131, 173, 186)
         assertEquals(10L, zones[1].seconds) // 첫 샘플 10초, 마지막 샘플은 종료까지 0초
     }
 
     @Test
-    fun `역치 3구간 경계`() {
-        val hr = listOf(HrPoint(t(0), 130), HrPoint(t(5), 131), HrPoint(t(10), 173))
-        val z = Analysis.zones3(hr, t(15), 131, 173)
-        assertEquals(listOf(5L, 5L, 5L), z.map { it.seconds })
+    fun `역치 3구간 경계는 삼성 헬스와 같다 93–131, 132–173, 174 이상`() {
+        val hr = listOf(HrPoint(t(0), 92), HrPoint(t(5), 131), HrPoint(t(10), 132), HrPoint(t(15), 173), HrPoint(t(20), 174))
+        val z = Analysis.zones3(hr, t(25), 131, 173, 186)
+        assertEquals(listOf(5L, 10L, 5L), z.map { it.seconds })
+        assertEquals(listOf("93–131 bpm", "132–173 bpm", "174+ bpm"), z.map { zoneRange(it) })
+        // 최대 심박을 모르면 하한 없음
+        assertEquals("≤ 131 bpm", zoneRange(Analysis.zones3(hr, t(25), 131, 173, null)[0]))
+    }
+
+    @Test
+    fun `올림 계산은 부동소수 오차가 없다`() {
+        assertEquals(114, Analysis.pctCeil(190, 60))
+        assertEquals(131, Analysis.pctCeil(186, 70))
+        assertEquals(93, Analysis.pctCeil(186, 50))
     }
 
     @Test
