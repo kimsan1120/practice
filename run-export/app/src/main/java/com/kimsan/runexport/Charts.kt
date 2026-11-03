@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -85,7 +86,15 @@ fun LineChart(
         }
         val path = Path()
         pts.forEachIndexed { i, p -> if (i == 0) path.moveTo(x(p.time), y(p.value)) else path.lineTo(x(p.time), y(p.value)) }
-        drawPath(path, color, style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        // 선 아래 그라데이션 채우기
+        val fill = Path().apply {
+            moveTo(x(pts.first().time), h)
+            pts.forEach { p -> lineTo(x(p.time), y(p.value)) }
+            lineTo(x(pts.last().time), h)
+            close()
+        }
+        drawPath(fill, Brush.verticalGradient(listOf(color.copy(alpha = 0.35f), color.copy(alpha = 0.02f)), startY = 0f, endY = h))
+        drawPath(path, color, style = Stroke(width = 5f, cap = StrokeCap.Round, join = StrokeJoin.Round))
 
         val paint = android.graphics.Paint().apply {
             this.color = labelColor.toArgb()
@@ -112,7 +121,11 @@ fun RouteShape(route: List<RoutePoint>, fastest: Pair<Instant, Instant>?, modifi
     val fast = Color(0xFFE53935)
     val startColor = Color(0xFF43A047)
     if (route.size < 2) return
-    Canvas(modifier.fillMaxWidth().height(240.dp)) {
+    Canvas(
+        modifier.fillMaxWidth().height(260.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+    ) {
         val lat0 = route.map { it.lat }.average()
         val k = cos(Math.toRadians(lat0))
         val xs = route.map { it.lon * k }
@@ -120,7 +133,7 @@ fun RouteShape(route: List<RoutePoint>, fastest: Pair<Instant, Instant>?, modifi
         val minX = xs.min(); val maxX = xs.max(); val minY = ys.min(); val maxY = ys.max()
         val spanX = (maxX - minX).coerceAtLeast(1e-9)
         val spanY = (maxY - minY).coerceAtLeast(1e-9)
-        val margin = 16f
+        val margin = 36f
         val scale = minOf((size.width - 2 * margin) / spanX, (size.height - 2 * margin) / spanY)
         val offX = (size.width - spanX * scale) / 2
         val offY = (size.height - spanY * scale) / 2
@@ -136,17 +149,15 @@ fun RouteShape(route: List<RoutePoint>, fastest: Pair<Instant, Instant>?, modifi
                 drawPath(p, fast, style = Stroke(width = 9f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
         }
-        drawCircle(startColor, 10f, pt(0))
-        drawCircle(Color.Black, 10f, pt(route.size - 1))
+        drawCircle(Color.White, 14f, pt(0)); drawCircle(startColor, 10f, pt(0))
+        drawCircle(Color.White, 14f, pt(route.size - 1)); drawCircle(Color(0xFF263238), 10f, pt(route.size - 1))
     }
 }
 
 /** 심박 구간 막대 */
 @Composable
 fun ZoneBars(zones: List<Zone>) {
-    val colors = listOf(
-        Color(0xFF90A4AE), Color(0xFF42A5F5), Color(0xFF66BB6A), Color(0xFFFFA726), Color(0xFFEF5350),
-    )
+    val colors = ZoneColors
     Column {
         zones.forEachIndexed { i, z ->
             val c = if (zones.size == 3) listOf(colors[1], colors[3], colors[4])[i] else colors[i % colors.size]
@@ -156,7 +167,7 @@ fun ZoneBars(zones: List<Zone>) {
                     Text(zoneRange(z), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Box(
-                    Modifier.weight(1f).height(14.dp).clip(RoundedCornerShape(7.dp))
+                    Modifier.weight(1f).height(18.dp).clip(RoundedCornerShape(9.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     Box(Modifier.fillMaxHeight().fillMaxWidth(z.fraction.toFloat().coerceIn(0f, 1f)).background(c))

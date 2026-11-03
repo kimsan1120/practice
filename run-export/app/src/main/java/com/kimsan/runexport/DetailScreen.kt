@@ -1,7 +1,13 @@
 package com.kimsan.runexport
 
 import android.content.Context
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -64,25 +70,42 @@ fun DetailScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // ---------- 머리말 + 내보내기 ----------
+        // ---------- 머리말 (그라데이션 카드) + 내보내기 ----------
         item {
-            Text(s.title ?: s.typeName, style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "${s.start.localDateTime()} ~ ${s.end.localTime()} · 출처: ${appLabel(context, s.sourcePackage)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            Button(onClick = onCopy, modifier = Modifier.fillMaxWidth()) { Text("분석용 텍스트 복사") }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f)) { Text("파일 공유") }
-                OutlinedButton(onClick = onSave, modifier = Modifier.weight(1f)) { Text("다운로드에 저장") }
+            Column(
+                Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(HeroBrush).padding(20.dp),
+            ) {
+                Text(
+                    "${s.title ?: s.typeName} · ${s.start.localDateTime().take(10)} ${s.start.localTime()}–${s.end.localTime()}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White.copy(alpha = 0.9f),
+                )
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(s.distanceMeters?.let { String.format(java.util.Locale.US, "%.2f", it / 1000) } ?: "-", style = BigNumber, color = Color.White)
+                    Text(" km", style = MaterialTheme.typography.titleLarge, color = Color.White, modifier = Modifier.padding(bottom = 8.dp))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    HeroStat("운동 시간", formatDuration(s.activeDuration))
+                    HeroStat("평균 페이스", formatPace(s.paceSecPerKm))
+                    HeroStat("평균 심박", s.avgHr?.let { "$it bpm" } ?: "-")
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "출처: ${appLabel(context, s.sourcePackage)}" + (bundle.weather?.let { " · ${fmt1(it.tempC)}°C" } ?: "") +
+                        (bundle.notes.rpe?.let { " · 체감 $it/10" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.8f),
+                )
             }
-            Text(
-                "복사: 상세정보 + 구간 + 심박 구간 + 회복 심박 + 컨디션을 한 번에 붙여넣기 좋은 글로. " +
-                    "공유/저장: 분석 텍스트 + CSV (요약·구간·심박구간·원본 샘플) + GPX.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 4.dp),
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onCopy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("분석용 텍스트 복사") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f).height(46.dp)) { Text("파일 공유") }
+                OutlinedButton(onClick = onSave, modifier = Modifier.weight(1f).height(46.dp)) { Text("다운로드 저장") }
+            }
+            Hint(
+                "복사: 상세정보 + 구간 + 심박 구간 + 회복 심박 + 컨디션을 붙여넣기 좋은 글로 · 공유/저장: 분석 텍스트 + CSV + GPX",
+                Modifier.padding(top = 6.dp),
             )
         }
 
@@ -130,17 +153,8 @@ fun DetailScreen(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
-                    TableRow("구간", "시간", "페이스", "심박", header = true)
-                    d.splits.forEach { sp ->
-                        val star = if (sp == a.fastestSplit) " ★" else ""
-                        TableRow(
-                            (if (sp.distanceM >= 999) "${sp.index} km" else "+${fmt0(sp.distanceM)} m") + star,
-                            formatDuration(sp.duration),
-                            formatPace(sp.paceSecPerKm),
-                            sp.avgHr?.toString() ?: "-",
-                        )
-                    }
-                    Note("★ 가장 빠른 구간 · 구간 시간에는 일시정지가 포함될 수 있어요.")
+                    SplitBars(d.splits, a.fastestSplit)
+                    Note("막대가 길수록 빠른 구간 · ★ 가장 빠른 1km · 구간 시간에는 일시정지가 포함될 수 있어요.")
                 }
                 if (d.laps.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
@@ -392,34 +406,71 @@ private fun PaceBasisTable(d: RunDetail) {
 
 @Composable
 private fun Section(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            content()
-        }
+    val accent = when {
+        "상세" in title -> MaterialTheme.colorScheme.primary
+        "경로" in title -> MetricColors.Distance
+        "차트" in title -> MetricColors.Pace
+        "구간기록" in title -> MetricColors.Time
+        "심박" in title -> MetricColors.Heart
+        "VO2" in title -> MetricColors.Vo2
+        "컨디션" in title -> MetricColors.Weather
+        else -> MetricColors.Neutral
     }
+    SectionCard(title, accent) { content() }
 }
 
 @Composable
-private fun StatGrid(stats: List<Pair<String, String>>) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        stats.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
-                row.forEach { (label, value) ->
-                    Column(Modifier.weight(1f)) {
-                        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(value, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+private fun StatGrid(stats: List<Pair<String, String>>) = StatTiles(stats)
+
+@Composable
+private fun Note(text: String) = Hint(text)
+
+/** 1km 구간: 빠를수록 긴 막대, 가장 빠른 구간은 강조색 */
+@Composable
+private fun SplitBars(splits: List<Split>, fastest: Split?) {
+    val paces = splits.mapNotNull { it.paceSecPerKm }
+    if (paces.isEmpty()) return
+    val fastestPace = paces.min()
+    val slowest = paces.max()
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth()) {
+            Text("구간", Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("페이스", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("시간", Modifier.width(56.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("심박", Modifier.width(40.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        splits.forEach { sp ->
+            val p = sp.paceSecPerKm ?: return@forEach
+            // 가장 느린 구간 = 45%, 가장 빠른 구간 = 100% 길이
+            val f = if (slowest - fastestPace < 1) 1f else (0.45f + 0.55f * ((slowest - p) / (slowest - fastestPace)).toFloat())
+            val isFast = sp == fastest
+            val barColor = if (isFast) MaterialTheme.colorScheme.primary else MetricColors.Pace.copy(alpha = 0.55f)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    (if (sp.distanceM >= 999) "${sp.index} km" else "+${fmt0(sp.distanceM)}m") + if (isFast) " ★" else "",
+                    Modifier.width(64.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isFast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                )
+                Box(Modifier.weight(1f).height(26.dp)) {
+                    Box(
+                        Modifier.fillMaxWidth(f.coerceIn(0.1f, 1f)).fillMaxHeight()
+                            .clip(RoundedCornerShape(8.dp)).background(barColor),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Text(
+                            formatPace(p),
+                            Modifier.padding(start = 10.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = Color.White,
+                        )
                     }
                 }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
+                Text(formatDuration(sp.duration), Modifier.width(56.dp).padding(start = 8.dp), style = MaterialTheme.typography.bodyMedium)
+                Text(sp.avgHr?.toString() ?: "-", Modifier.width(40.dp), style = MaterialTheme.typography.bodyMedium, color = MetricColors.Heart)
             }
         }
     }
-}
-
-@Composable
-private fun Note(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
