@@ -92,7 +92,7 @@ fun DetailScreen(
                 StatGrid(detailStats(bundle))
                 if (a.cadenceSource.isNotEmpty()) Note("케이던스: ${a.cadenceSource}")
                 if (a.elevation == null) Note("최저·최고 고도와 오르막/내리막 거리는 GPS 경로가 있어야 계산돼요.")
-                Note("최고 페이스는 10초 평균 속도 기준이에요 (GPS 튐 방지).")
+                Note("운동 시간 기준: ${s.durationBasis} · 평균 페이스·속도 = 거리 ÷ 운동 시간 · 최고 페이스 = 최고 속도 기준")
             }
         }
 

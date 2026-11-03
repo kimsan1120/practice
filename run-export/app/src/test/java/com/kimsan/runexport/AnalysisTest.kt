@@ -110,6 +110,24 @@ class AnalysisTest {
     }
 
     @Test
+    fun `움직인 시간 - 일시정지(샘플 공백, 정지 속도)는 뺀다`() {
+        // 0~600초 1초 간격 달리기, 600~654초 샘플 없음(일시정지), 654~1190초 다시 달리기, 마지막 10초는 정지(0km/h)
+        val run1 = (0..600L).map { TimeValue(t(it), 10.0) }
+        val run2 = (654..1180L).map { TimeValue(t(it), 10.0) }
+        val stop = (1181..1190L).map { TimeValue(t(it), 0.0) }
+        val moving = Analysis.movingTime(run1 + run2 + stop)!!
+        assertEquals(600 + 526L, moving.seconds)
+        assertNull(Analysis.movingTime(emptyList()))
+    }
+
+    @Test
+    fun `최고 페이스는 최고 속도가 있으면 그것을 쓴다`() {
+        val d = RunDetail(summary(), emptyList(), emptyList(), emptyList(), RouteState.NONE, emptyList(), "", emptyList())
+        val a = Analysis.analyze(d, Profile())
+        assertEquals(225.0, a.maxPaceSecPerKm!!, 1e-9) // 16km/h = 3'45"
+    }
+
+    @Test
     fun `이동평균`() {
         val s = (0..9L).map { TimeValue(t(it), it.toDouble()) }
         val r = Analysis.rolling(s, 3)

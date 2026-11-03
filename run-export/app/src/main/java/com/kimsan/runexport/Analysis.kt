@@ -79,7 +79,8 @@ object Analysis {
 
         return RunAnalysis(
             totalTime = Duration.between(s.start, s.end),
-            maxPaceSecPerKm = maxPace(speed),
+            // 최고 페이스 = 최고 속도 (삼성 헬스와 같은 방식), 없으면 10초 평균 속도 최댓값
+            maxPaceSecPerKm = s.maxSpeedKmh?.takeIf { it in 3.0..30.0 }?.let { 3600.0 / it } ?: maxPace(speed),
             elevation = elevation(d.route),
             avgCadence = avgCad ?: s.cadenceSpm,
             maxCadence = maxCad,
@@ -108,13 +109,17 @@ object Analysis {
 
     // ---------- 평균 페이스 계산 근거 ----------
 
-    /** 실제로 움직인 시간: 속도 2km/h 이상인 구간 합 (샘플 간격 최대 10초) */
+    /**
+     * 실제로 움직인 시간: 속도 2km/h 이상인 구간의 합.
+     * 샘플 사이가 10초 넘게 비면 일시정지로 보고 세지 않는다.
+     */
     fun movingTime(speedKmh: List<TimeValue>): Duration? {
         if (speedKmh.size < 3) return null
         var ms = 0L
         for (i in 1 until speedKmh.size) {
             if (speedKmh[i].value < 2.0) continue
-            ms += min(Duration.between(speedKmh[i - 1].time, speedKmh[i].time).toMillis(), 10_000L).coerceAtLeast(0)
+            val dt = Duration.between(speedKmh[i - 1].time, speedKmh[i].time).toMillis()
+            if (dt in 1..10_000) ms += dt
         }
         return Duration.ofMillis(ms)
     }

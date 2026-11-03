@@ -31,6 +31,8 @@ data class RunSummary(
     val maxSpeedKmh: Double?,
     val elevationGainM: Double?,
     val routeState: RouteState,
+    /** 운동 시간을 어떤 기준으로 정했는지 */
+    val durationBasis: String = "",
 ) {
     /** 평균 페이스 (초/km) */
     val paceSecPerKm: Double?

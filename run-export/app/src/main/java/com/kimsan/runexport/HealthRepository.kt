@@ -81,9 +81,27 @@ class HealthRepository(private val context: Context) {
         val any = aggregateOrNull(metrics, range, emptySet())
         fun <T : Any> pick(m: AggregateMetric<T>): T? = own?.get(m) ?: any?.get(m)
 
-        val duration = own?.get(ExerciseSessionRecord.EXERCISE_DURATION_TOTAL)
-            ?.takeIf { !it.isZero }
-            ?: Duration.between(s.startTime, s.endTime)
+        // 운동 시간 = 삼성 헬스처럼 일시정지를 뺀 시간
+        val span = Duration.between(s.startTime, s.endTime)
+        val pauses = pauseSeconds(s)
+        val agg = own?.get(ExerciseSessionRecord.EXERCISE_DURATION_TOTAL)?.takeIf { !it.isZero && it <= span }
+        val (duration, basis) = when {
+            pauses > 0 -> span.minusSeconds(pauses) to "일시정지 구간 제외"
+            agg != null && agg < span.minusSeconds(2) -> agg to "Health Connect 운동 시간"
+            else -> {
+                val moving = if (has(granted, SpeedRecord::class)) runCatching {
+                    val samples = readPreferOrigin(SpeedRecord::class, s.startTime, s.endTime, setOf(s.metadata.dataOrigin))
+                        .flatMap { r -> r.samples.map { TimeValue(it.time, it.speed.inKilometersPerHour) } }
+                        .filter { !it.time.isBefore(s.startTime) && !it.time.isAfter(s.endTime) }
+                        .distinctBy { it.time }.sortedBy { it.time }
+                    Analysis.movingTime(samples)
+                }.getOrNull() else null
+                if (moving != null && moving > span.dividedBy(2) && moving < span.minusSeconds(5))
+                    moving to "움직인 시간 (속도 기록)"
+                else span to "시작~종료 (일시정지 정보 없음)"
+            }
+        }
+        val distanceM = pick(DistanceRecord.DISTANCE_TOTAL)?.inMeters
 
         return RunSummary(
             id = s.metadata.id,
@@ -93,14 +111,17 @@ class HealthRepository(private val context: Context) {
             end = s.endTime,
             sourcePackage = s.metadata.dataOrigin.packageName,
             activeDuration = duration,
-            distanceMeters = pick(DistanceRecord.DISTANCE_TOTAL)?.inMeters,
+            durationBasis = basis,
+            distanceMeters = distanceM,
             avgHr = pick(HeartRateRecord.BPM_AVG),
             maxHr = pick(HeartRateRecord.BPM_MAX),
             minHr = pick(HeartRateRecord.BPM_MIN),
             steps = pick(StepsRecord.COUNT_TOTAL),
             totalKcal = pick(TotalCaloriesBurnedRecord.ENERGY_TOTAL)?.inKilocalories,
             activeKcal = pick(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)?.inKilocalories,
-            avgSpeedKmh = pick(SpeedRecord.SPEED_AVG)?.inKilometersPerHour,
+            // 평균 속도 = 거리 ÷ 운동 시간 (삼성 헬스와 같은 방식), 거리가 없으면 속도 기록 평균
+            avgSpeedKmh = distanceM?.takeIf { it > 10 && duration.seconds > 0 }?.let { it / 1000 / (duration.seconds / 3600.0) }
+                ?: pick(SpeedRecord.SPEED_AVG)?.inKilometersPerHour,
             maxSpeedKmh = pick(SpeedRecord.SPEED_MAX)?.inKilometersPerHour,
             elevationGainM = pick(ElevationGainedRecord.ELEVATION_GAINED_TOTAL)?.inMeters,
             routeState = s.exerciseRouteResult.toState(),
@@ -149,9 +170,7 @@ class HealthRepository(private val context: Context) {
         val durationAgg = aggregateOrNull(
             setOf(ExerciseSessionRecord.EXERCISE_DURATION_TOTAL), TimeRangeFilter.between(start, end), origin
         )?.get(ExerciseSessionRecord.EXERCISE_DURATION_TOTAL)
-        val pauseTypes = setOf(ExerciseSegment.EXERCISE_SEGMENT_TYPE_PAUSE, ExerciseSegment.EXERCISE_SEGMENT_TYPE_REST)
-        val pauseSeconds = session.segments.filter { it.segmentType in pauseTypes }
-            .sumOf { Duration.between(it.startTime, it.endTime).seconds }
+        val pauseSeconds = pauseSeconds(session)
 
         val routeResult = session.exerciseRouteResult
         val route = (routeResult as? ExerciseRouteResult.Data)?.exerciseRoute?.toPoints().orEmpty()
@@ -259,6 +278,12 @@ class HealthRepository(private val context: Context) {
 
     private inline fun perm(granted: Set<String>, type: KClass<out Record>, value: () -> String): String =
         if (has(granted, type)) value() else "권한 없음"
+
+    /** 일시정지 / 휴식 세그먼트 합계(초) */
+    private fun pauseSeconds(s: ExerciseSessionRecord): Long {
+        val pauseTypes = setOf(ExerciseSegment.EXERCISE_SEGMENT_TYPE_PAUSE, ExerciseSegment.EXERCISE_SEGMENT_TYPE_REST)
+        return s.segments.filter { it.segmentType in pauseTypes }.sumOf { Duration.between(it.startTime, it.endTime).seconds }
+    }
 
     private fun has(granted: Set<String>, type: KClass<out Record>) =
         HealthPermission.getReadPermission(type) in granted
