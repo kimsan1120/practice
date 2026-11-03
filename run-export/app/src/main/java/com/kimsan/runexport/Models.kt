@@ -105,6 +105,33 @@ data class RunDetail(
     val distanceAllOrigins: Double? = null,
     /** 세션과 겹치는 거리 기록의 합 */
     val distanceRecordsSum: Double? = null,
+    /** 구간 계산에 쓴 (시각 → 누적 거리) 타임라인 */
+    val timeline: List<SplitCalculator.Mark> = emptyList(),
+)
+
+/** 베스트 기록 대상 거리 (m) */
+val BEST_EFFORT_DISTANCES = listOf(1000, 3000, 5000, 10000, 21097)
+
+fun bestEffortLabel(m: Int): String = when (m) {
+    21097 -> "하프"
+    else -> "${m / 1000}km"
+}
+
+/** 기록별 계산 지표 (통계·베스트 기록용으로 저장) */
+data class RunMetrics(
+    val id: String,
+    val start: Instant,
+    val distanceM: Double?,
+    /** 대상 거리(m) → 가장 빠른 시간(초) */
+    val bestEfforts: Map<Int, Long>,
+    /** 효율 지수: 분당 이동 거리(m) ÷ 평균 심박 */
+    val ef: Double?,
+    /** 유산소 디커플링 %: 전반 대비 후반 효율 저하 */
+    val decouplingPct: Double?,
+    /** 후반 평균 심박 − 전반 평균 심박 */
+    val hrDriftBpm: Double?,
+    /** 훈련 부하 (Banister TRIMP) */
+    val trimp: Double?,
 )
 
 enum class Sex { MALE, FEMALE }
@@ -119,6 +146,10 @@ data class Profile(
     /** 무산소 역치 심박 */
     val anaerobicThreshold: Int? = null,
     val weightKg: Double? = null,
+    /** 월 목표 거리 */
+    val monthlyGoalKm: Double? = null,
+    /** 새 러닝 알림 */
+    val notifyNewRuns: Boolean = false,
 ) {
     fun ageAt(year: Int): Int? = birthYear?.let { year - it }
 }

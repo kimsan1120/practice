@@ -15,6 +15,8 @@ class Prefs(context: Context) {
         aerobicThreshold = sp.int("aet"),
         anaerobicThreshold = sp.int("ant"),
         weightKg = sp.getString("weightKg", null)?.toDoubleOrNull(),
+        monthlyGoalKm = sp.getString("goalKm", null)?.toDoubleOrNull(),
+        notifyNewRuns = sp.getBoolean("notify", false),
     )
 
     fun saveProfile(p: Profile) {
@@ -25,6 +27,8 @@ class Prefs(context: Context) {
             .putIntOrRemove("aet", p.aerobicThreshold)
             .putIntOrRemove("ant", p.anaerobicThreshold)
             .putString("weightKg", p.weightKg?.toString())
+            .putString("goalKm", p.monthlyGoalKm?.toString())
+            .putBoolean("notify", p.notifyNewRuns)
             .apply()
     }
 
@@ -68,6 +72,88 @@ class Prefs(context: Context) {
         w.humidity?.let { o.put("h", it) }
         w.windKmh?.let { o.put("w", it) }
         sp.edit().putString("weather_$sessionId", o.toString()).apply()
+    }
+
+    // ---------- 요약 캐시 (통계용) ----------
+
+    fun saveSummary(r: RunSummary, lastModified: Long) {
+        val o = JSONObject()
+            .put("id", r.id).put("type", r.exerciseType).put("title", r.title ?: JSONObject.NULL)
+            .put("start", r.start.toEpochMilli()).put("end", r.end.toEpochMilli())
+            .put("src", r.sourcePackage).put("dur", r.activeDuration.seconds).put("basis", r.durationBasis)
+            .put("route", r.routeState.name).put("mod", lastModified)
+        o.putOpt("dist", r.distanceMeters); o.putOpt("avgHr", r.avgHr); o.putOpt("maxHr", r.maxHr); o.putOpt("minHr", r.minHr)
+        o.putOpt("steps", r.steps); o.putOpt("kcal", r.totalKcal); o.putOpt("akcal", r.activeKcal)
+        o.putOpt("avgSpd", r.avgSpeedKmh); o.putOpt("maxSpd", r.maxSpeedKmh); o.putOpt("elev", r.elevationGainM)
+        sp.edit().putString("sum_${r.id}", o.toString()).apply()
+    }
+
+    /** id → (요약, 마지막 수정 시각) */
+    fun summaries(): Map<String, Pair<RunSummary, Long>> = sp.all.entries
+        .filter { it.key.startsWith("sum_") }
+        .mapNotNull { e ->
+            runCatching {
+                val o = JSONObject(e.value as String)
+                fun d(k: String) = if (o.has(k) && !o.isNull(k)) o.getDouble(k) else null
+                fun l(k: String) = if (o.has(k) && !o.isNull(k)) o.getLong(k) else null
+                val r = RunSummary(
+                    id = o.getString("id"),
+                    exerciseType = o.getInt("type"),
+                    title = if (o.isNull("title")) null else o.getString("title"),
+                    start = java.time.Instant.ofEpochMilli(o.getLong("start")),
+                    end = java.time.Instant.ofEpochMilli(o.getLong("end")),
+                    sourcePackage = o.getString("src"),
+                    activeDuration = java.time.Duration.ofSeconds(o.getLong("dur")),
+                    distanceMeters = d("dist"), avgHr = l("avgHr"), maxHr = l("maxHr"), minHr = l("minHr"),
+                    steps = l("steps"), totalKcal = d("kcal"), activeKcal = d("akcal"),
+                    avgSpeedKmh = d("avgSpd"), maxSpeedKmh = d("maxSpd"), elevationGainM = d("elev"),
+                    routeState = RouteState.valueOf(o.getString("route")),
+                    durationBasis = o.optString("basis", ""),
+                )
+                r.id to (r to o.getLong("mod"))
+            }.getOrNull()
+        }.toMap()
+
+    // ---------- 지표 캐시 (베스트 기록 / 효율 / 부하) ----------
+
+    fun saveMetrics(m: RunMetrics) {
+        val best = JSONObject().apply { m.bestEfforts.forEach { (k, v) -> put(k.toString(), v) } }
+        val o = JSONObject().put("id", m.id).put("start", m.start.toEpochMilli()).put("best", best)
+        o.putOpt("dist", m.distanceM); o.putOpt("ef", m.ef); o.putOpt("dec", m.decouplingPct)
+        o.putOpt("drift", m.hrDriftBpm); o.putOpt("trimp", m.trimp)
+        sp.edit().putString("met_${m.id}", o.toString()).apply()
+    }
+
+    fun metrics(): Map<String, RunMetrics> = sp.all.entries
+        .filter { it.key.startsWith("met_") }
+        .mapNotNull { e ->
+            runCatching {
+                val o = JSONObject(e.value as String)
+                fun d(k: String) = if (o.has(k) && !o.isNull(k)) o.getDouble(k) else null
+                val b = o.getJSONObject("best")
+                val m = RunMetrics(
+                    id = o.getString("id"),
+                    start = java.time.Instant.ofEpochMilli(o.getLong("start")),
+                    distanceM = d("dist"),
+                    bestEfforts = b.keys().asSequence().associate { it.toInt() to b.getLong(it) },
+                    ef = d("ef"), decouplingPct = d("dec"), hrDriftBpm = d("drift"), trimp = d("trimp"),
+                )
+                m.id to m
+            }.getOrNull()
+        }.toMap()
+
+    // ---------- 새 러닝 알림 ----------
+
+    var changesToken: String?
+        get() = sp.getString("changesToken", null)
+        set(v) { sp.edit().putString("changesToken", v).apply() }
+
+    fun wasNotified(id: String): Boolean = sp.getStringSet("notified", emptySet())!!.contains(id)
+
+    fun markNotified(id: String) {
+        val set = sp.getStringSet("notified", emptySet())!!.toMutableSet().apply { add(id) }
+        // 너무 커지지 않게 최근 200개만
+        sp.edit().putStringSet("notified", set.toList().takeLast(200).toSet()).apply()
     }
 
     private fun android.content.SharedPreferences.int(key: String): Int? =

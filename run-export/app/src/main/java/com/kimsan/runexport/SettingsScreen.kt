@@ -27,13 +27,23 @@ import androidx.compose.ui.unit.dp
 
 /** 프로필: 심박 구간 / VO2max 등급 / 체중 계산에 쓰는 값 */
 @Composable
-fun SettingsScreen(profile: Profile, onSave: (Profile) -> Unit, onOpenHealthConnect: () -> Unit) {
+fun SettingsScreen(
+    profile: Profile,
+    onSave: (Profile) -> Unit,
+    onOpenHealthConnect: () -> Unit,
+    backgroundSupported: Boolean = false,
+    backgroundGranted: Boolean = false,
+    onEnableNotify: () -> Unit = {},
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var birth by rememberSaveable { mutableStateOf(profile.birthYear?.toString() ?: "") }
     var sex by rememberSaveable { mutableStateOf(profile.sex?.name) }
     var maxHr by rememberSaveable { mutableStateOf(profile.maxHr?.toString() ?: "") }
     var aet by rememberSaveable { mutableStateOf(profile.aerobicThreshold?.toString() ?: "") }
     var ant by rememberSaveable { mutableStateOf(profile.anaerobicThreshold?.toString() ?: "") }
     var weight by rememberSaveable { mutableStateOf(profile.weightKg?.toString() ?: "") }
+    var goal by rememberSaveable { mutableStateOf(profile.monthlyGoalKm?.let { fmt0(it) } ?: "") }
+    var notify by rememberSaveable { mutableStateOf(profile.notifyNewRuns) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -57,6 +67,11 @@ fun SettingsScreen(profile: Profile, onSave: (Profile) -> Unit, onOpenHealthConn
             )
         }
 
+        SectionCard("목표", MetricColors.Distance) {
+            NumberField("월 목표 거리 km (예: 100)", goal, 4) { goal = it }
+            Hint("통계 화면에서 이번 달 진행률과 하루에 몇 km 더 뛰어야 하는지 보여줘요.")
+        }
+
         SectionCard("심박수 구간", MetricColors.Heart) {
             NumberField("최대 심박 (비우면 220 − 나이)", maxHr, 3) { maxHr = it }
             Hint(
@@ -66,6 +81,32 @@ fun SettingsScreen(profile: Profile, onSave: (Profile) -> Unit, onOpenHealthConn
             NumberField("유산소 역치 심박 (예: 131)", aet, 3) { aet = it }
             NumberField("무산소 역치 심박 (예: 173)", ant, 3) { ant = it }
             Hint("삼성 헬스 '심박수 구간' 화면의 역치 값을 그대로 넣으면 같은 기준으로 3구간을 계산해요.")
+        }
+
+
+        SectionCard("새 러닝 알림", MetricColors.Weather) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("러닝이 들어오면 알림", style = MaterialTheme.typography.titleSmall)
+                    Hint("15분마다 확인해요. 알림을 누르면 바로 그 기록이 열려요.")
+                }
+                androidx.compose.material3.Switch(checked = notify, onCheckedChange = { notify = it; if (it) onEnableNotify() })
+            }
+            if (!backgroundSupported) {
+                Hint("⚠️ 이 기기의 Health Connect 는 백그라운드 읽기를 지원하지 않아서 알림이 동작하지 않을 수 있어요. Health Connect 를 업데이트해 보세요.")
+            } else {
+                val notifOk = NewRunWorker.notificationsAllowed(context)
+                Hint("백그라운드 읽기 권한: ${if (backgroundGranted) "✅ 허용됨" else "❌ 필요"} · 알림 권한: ${if (notifOk) "✅ 허용됨" else "❌ 필요"}")
+                if (notify && (!backgroundGranted || !notifOk)) {
+                    OutlinedButton(onClick = onEnableNotify, modifier = Modifier.fillMaxWidth()) { Text("권한 허용하기") }
+                }
+            }
+            Hint("켜거나 끈 뒤에는 아래 '저장'을 눌러야 적용돼요.")
+        }
+
+        SectionCard("Health Connect", MetricColors.Distance) {
+            Hint("GPS 경로를 기록마다 묻지 않게 하려면 Health Connect 설정 → 앱 권한 → 러닝 기록 내보내기 → '운동 경로' 를 '항상 허용' 으로 바꾸세요.")
+            OutlinedButton(onClick = onOpenHealthConnect, modifier = Modifier.fillMaxWidth()) { Text("Health Connect 설정 열기") }
         }
 
         Button(
@@ -78,16 +119,13 @@ fun SettingsScreen(profile: Profile, onSave: (Profile) -> Unit, onOpenHealthConn
                         aerobicThreshold = aet.toIntOrNull()?.takeIf { it in 60..230 },
                         anaerobicThreshold = ant.toIntOrNull()?.takeIf { it in 60..240 },
                         weightKg = weight.toDoubleOrNull()?.takeIf { it in 20.0..300.0 },
+                        monthlyGoalKm = goal.toDoubleOrNull()?.takeIf { it > 0 },
+                        notifyNewRuns = notify,
                     )
                 )
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
         ) { Text("저장") }
-
-        SectionCard("Health Connect", MetricColors.Distance) {
-            Hint("GPS 경로를 기록마다 묻지 않게 하려면 Health Connect 설정 → 앱 권한 → 러닝 기록 내보내기 → '운동 경로' 를 '항상 허용' 으로 바꾸세요.")
-            OutlinedButton(onClick = onOpenHealthConnect, modifier = Modifier.fillMaxWidth()) { Text("Health Connect 설정 열기") }
-        }
     }
 }
 

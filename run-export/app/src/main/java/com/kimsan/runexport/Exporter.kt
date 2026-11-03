@@ -24,6 +24,9 @@ data class ExportBundle(
     val notes: RunNotes,
     val weather: WeatherInfo?,
     val profile: Profile,
+    val compare: RunSummary? = null,
+    val compareMetrics: RunMetrics? = null,
+    val pbs: Map<Int, RunMetrics> = emptyMap(),
 ) {
     val restingHr: Long? get() = notes.restingHr?.toLong() ?: detail.restingHr
     val weightKg: Double? get() = detail.weightKg ?: profile.weightKg
@@ -112,6 +115,31 @@ object Exporter {
             a.zones3.forEach { appendLine("- ${it.name} ${zoneRange(it)}: ${formatDuration(Duration.ofSeconds(it.seconds))} (${(it.fraction * 100).toInt()}%)") }
             appendLine()
         }
+        val m = a.metrics
+        if (m.bestEfforts.isNotEmpty()) {
+            appendLine("■ 이번 기록 베스트 구간")
+            m.bestEfforts.toSortedMap().forEach { (dist, sec) ->
+                val pb = if (b.pbs[dist]?.id == s.id) " 🏅개인 최고" else b.pbs[dist]?.bestEfforts?.get(dist)?.let { " (PB ${formatDuration(Duration.ofSeconds(it))})" } ?: ""
+                appendLine("- ${bestEffortLabel(dist)}: ${formatDuration(Duration.ofSeconds(sec))} (${formatPace(sec / (dist / 1000.0))}/km)$pb")
+            }
+            appendLine()
+        }
+        if (m.ef != null || m.decouplingPct != null || m.trimp != null) {
+            appendLine("■ 효율 · 부하")
+            m.ef?.let { appendLine("- 효율 지수(EF): ${String.format(Locale.US, "%.2f", it)} (분당 m ÷ 평균 심박)") }
+            m.decouplingPct?.let { appendLine("- 유산소 디커플링: ${fmt1(it)}% (${Analysis.decouplingLabel(it)})") }
+            m.hrDriftBpm?.let { appendLine("- 심박 드리프트: 후반 ${if (it >= 0) "+" else ""}${fmt1(it)} bpm") }
+            m.trimp?.let { appendLine("- 훈련 부하(TRIMP): ${fmt0(it)} (${Analysis.trimpLabel(it)}, 안정시 ${a.restHrUsed}/최대 ${a.maxHrUsed})") }
+            appendLine()
+        }
+        b.compare?.let { c ->
+            appendLine("■ 지난 비슷한 거리 기록과 비교 (${c.start.localDateTime().take(10)}, ${formatKm(c.distanceMeters)})")
+            val dp = if (s.paceSecPerKm != null && c.paceSecPerKm != null) s.paceSecPerKm!! - c.paceSecPerKm!! else null
+            appendLine("- 페이스: ${formatPace(s.paceSecPerKm)} vs ${formatPace(c.paceSecPerKm)}" + (dp?.let { " (${if (it <= 0) "${fmt0(-it)}초 빠름" else "${fmt0(it)}초 느림"})" } ?: ""))
+            appendLine("- 평균 심박: ${s.avgHr ?: "-"} vs ${c.avgHr ?: "-"}")
+            if (m.ef != null && b.compareMetrics?.ef != null) appendLine("- 효율 지수: ${String.format(Locale.US, "%.2f", m.ef)} vs ${String.format(Locale.US, "%.2f", b.compareMetrics.ef)}")
+            appendLine()
+        }
         a.recovery?.let { r ->
             appendLine("■ 회복 심박")
             appendLine(
@@ -127,6 +155,30 @@ object Exporter {
         }
         appendLine("■ 데이터 상태")
         appendLine(d.diagnostics.drop(2).joinToString(" · ") { "${it.label} ${it.value}" })
+    }
+
+    /** 여러 기록 요약 + 지표 (기간 내보내기) */
+    fun periodCsv(runs: List<RunSummary>, metrics: Map<String, RunMetrics>): String = buildString {
+        append(BOM)
+        line(
+            "날짜", "시작", "운동시간", "운동시간(초)", "거리(km)", "평균페이스(/km)", "평균속도(km/h)", "평균심박", "최고심박",
+            "걸음수", "케이던스(spm)", "칼로리(kcal)", "상승고도(m)", "효율지수", "디커플링(%)", "심박드리프트", "TRIMP",
+            "베스트1km", "베스트3km", "베스트5km", "베스트10km", "베스트하프",
+        )
+        for (r in runs.sortedBy { it.start }) {
+            val m = metrics[r.id]
+            val z = r.start.atZone(ZoneId.systemDefault())
+            line(
+                z.toLocalDate().toString(), r.start.localTime(), formatDuration(r.activeDuration), r.activeDuration.seconds.toString(),
+                r.distanceMeters?.let { String.format(Locale.US, "%.3f", it / 1000) } ?: "",
+                formatPace(r.paceSecPerKm).orBlank(), fmt1(r.avgSpeedKmh).orBlank(),
+                r.avgHr?.toString() ?: "", r.maxHr?.toString() ?: "", r.steps?.toString() ?: "", fmt0(r.cadenceSpm).orBlank(),
+                fmt0(r.totalKcal).orBlank(), fmt1(r.elevationGainM).orBlank(),
+                m?.ef?.let { String.format(Locale.US, "%.3f", it) } ?: "", fmt1(m?.decouplingPct).orBlank(),
+                fmt1(m?.hrDriftBpm).orBlank(), fmt0(m?.trimp).orBlank(),
+                *BEST_EFFORT_DISTANCES.map { d -> m?.bestEfforts?.get(d)?.let { formatDuration(Duration.ofSeconds(it)) } ?: "" }.toTypedArray(),
+            )
+        }
     }
 
     fun copyToClipboard(context: Context, text: String) {

@@ -47,6 +47,8 @@ fun LineChart(
     modifier: Modifier = Modifier,
     invertY: Boolean = false,
     highlight: Pair<Instant, Instant>? = null,
+    /** 시간축 양 끝 라벨 (기본: 0분 / N분) */
+    xLabels: Pair<String, String>? = null,
 ) {
     val pts = remember(series) { Analysis.downsample(series) }
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -108,8 +110,8 @@ fun LineChart(
         c.drawText(yLabel(topV), 4f, 28f, paint)
         c.drawText(yLabel(botV), 4f, h - 6f, paint)
         // 시간축
-        c.drawText("0분", 0f, size.height - 4f, paint)
-        val endLabel = "${(totalSec / 60).toInt()}분"
+        c.drawText(xLabels?.first ?: "0분", 0f, size.height - 4f, paint)
+        val endLabel = xLabels?.second ?: "${(totalSec / 60).toInt()}분"
         c.drawText(endLabel, w - paint.measureText(endLabel), size.height - 4f, paint)
     }
 }

@@ -166,6 +166,79 @@ fun DetailScreen(
             }
         }
 
+        // ---------- 베스트 구간 · 효율 · 부하 ----------
+        item {
+            Section("베스트 구간 · 효율 · 부하") {
+                val m = a.metrics
+                if (m.bestEfforts.isNotEmpty()) {
+                    m.bestEfforts.toSortedMap().forEach { (dist, sec) ->
+                        val isPb = bundle.pbs[dist]?.id == s.id
+                        val pbSec = bundle.pbs[dist]?.bestEfforts?.get(dist)
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Pill(bestEffortLabel(dist), MaterialTheme.colorScheme.primary, Modifier.width(64.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Text(formatDuration(Duration.ofSeconds(sec)), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                            Text("${formatPace(sec / (dist / 1000.0))}/km", Modifier.width(76.dp), style = MaterialTheme.typography.bodyMedium, color = MetricColors.Pace)
+                            when {
+                                isPb -> Pill("🏅 PB", MetricColors.Distance)
+                                pbSec != null -> Text("PB ${formatDuration(Duration.ofSeconds(pbSec))}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    Note("기록 안에서 그 거리를 가장 빨리 달린 구간 · PB 는 분석한 기록들 중 최고")
+                    Spacer(Modifier.height(6.dp))
+                }
+                StatGrid(
+                    listOfNotNull(
+                        m.ef?.let { "효율 지수 (EF)" to String.format(java.util.Locale.US, "%.2f", it) },
+                        m.decouplingPct?.let { "유산소 디커플링" to "${fmt1(it)}%" },
+                        m.hrDriftBpm?.let { "심박 드리프트" to "${if (it >= 0) "+" else ""}${fmt1(it)} bpm" },
+                        m.trimp?.let { "훈련 부하 (TRIMP)" to "${fmt0(it)} · ${Analysis.trimpLabel(it)}" },
+                    )
+                )
+                Note(
+                    "EF = 분당 이동 거리 ÷ 평균 심박 (같은 심박에 더 빠르면 ↑) · 디커플링 = 전반 대비 후반 효율 저하" +
+                        (m.decouplingPct?.let { " → ${Analysis.decouplingLabel(it)}" } ?: "") +
+                        " · TRIMP = 심박 강도×시간 (안정시 ${a.restHrUsed} ${a.restHrSource}, 최대 ${a.maxHrUsed ?: "-"})"
+                )
+            }
+        }
+
+        // ---------- 지난 기록과 비교 ----------
+        bundle.compare?.let { c ->
+            item {
+                Section("지난 기록과 비교") {
+                    val cd = c.start.atZone(java.time.ZoneId.systemDefault())
+                    Note("${cd.monthValue}/${cd.dayOfMonth} ${formatKm(c.distanceMeters)} 러닝 (비슷한 거리 중 가장 최근)")
+                    CompareRow("", "이번", "지난번", "", header = true)
+                    CompareRow("거리", formatKm(s.distanceMeters), formatKm(c.distanceMeters), "")
+                    CompareRow("운동 시간", formatDuration(s.activeDuration), formatDuration(c.activeDuration), "")
+                    val dp = if (s.paceSecPerKm != null && c.paceSecPerKm != null) s.paceSecPerKm!! - c.paceSecPerKm!! else null
+                    CompareRow(
+                        "평균 페이스", formatPace(s.paceSecPerKm), formatPace(c.paceSecPerKm),
+                        dp?.let { if (it <= 0) "▲ ${fmt0(-it)}초" else "▼ ${fmt0(it)}초" } ?: "",
+                        good = dp?.let { it <= 0 },
+                    )
+                    val dh = if (s.avgHr != null && c.avgHr != null) s.avgHr - c.avgHr else null
+                    CompareRow(
+                        "평균 심박", s.avgHr?.toString() ?: "-", c.avgHr?.toString() ?: "-",
+                        dh?.let { if (it <= 0) "▼ ${-it}" else "▲ $it" } ?: "",
+                        good = dh?.let { it <= 0 },
+                    )
+                    CompareRow("케이던스", fmt0(s.cadenceSpm), fmt0(c.cadenceSpm), "")
+                    val ce = bundle.compareMetrics?.ef
+                    val me = a.metrics.ef
+                    if (ce != null && me != null) {
+                        CompareRow(
+                            "효율 지수", String.format(java.util.Locale.US, "%.2f", me), String.format(java.util.Locale.US, "%.2f", ce),
+                            if (me >= ce) "▲" else "▼", good = me >= ce,
+                        )
+                    }
+                    Note("▲ 초록 = 좋아짐 · 페이스는 빨라지면, 심박은 낮아지면 좋아진 것")
+                }
+            }
+        }
+
         // ---------- 4. 심박수 구간 ----------
         item {
             Section("심박수 구간") {
@@ -421,6 +494,21 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 
 @Composable
 private fun StatGrid(stats: List<Pair<String, String>>) = StatTiles(stats)
+
+@Composable
+private fun CompareRow(label: String, now: String, prev: String, delta: String, header: Boolean = false, good: Boolean? = null) {
+    val style = if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodyMedium
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(label, Modifier.weight(1.1f), style = style, color = dim)
+        Text(now, Modifier.weight(1f), style = if (header) style else MaterialTheme.typography.titleSmall)
+        Text(prev, Modifier.weight(1f), style = style, color = dim)
+        Text(
+            delta, Modifier.weight(0.8f), style = MaterialTheme.typography.labelLarge,
+            color = when (good) { true -> MetricColors.Steps; false -> MetricColors.Heart; null -> dim },
+        )
+    }
+}
 
 @Composable
 private fun Note(text: String) = Hint(text)

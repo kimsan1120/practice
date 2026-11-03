@@ -140,6 +140,50 @@ class AnalysisTest {
     }
 
     @Test
+    fun `베스트 기록 - 가장 빠른 1km 구간을 찾는다`() {
+        // 0~2km: 6분/km, 2~3km: 5분/km, 3~4km: 6분/km (1초마다)
+        val marks = mutableListOf(SplitCalculator.Mark(t(0), 0.0))
+        var m = 0.0
+        for (sec in 1..1380L) {
+            m += if (sec in 721..1020) 1000.0 / 300 else 1000.0 / 360
+            marks += SplitCalculator.Mark(t(sec), m)
+        }
+        val best1k = Analysis.bestEffort(marks, 1000.0)!!
+        assertEquals(300.0, best1k.toMillis() / 1000.0, 1.0)
+        val best3k = Analysis.bestEffort(marks, 3000.0)!!
+        assertEquals(300.0 + 720.0, best3k.toMillis() / 1000.0, 2.0) // 5분 1km + 6분 2km
+        assertNull(Analysis.bestEffort(marks, 5000.0))
+    }
+
+    @Test
+    fun `누적 거리 보간`() {
+        val tl = listOf(SplitCalculator.Mark(t(0), 0.0), SplitCalculator.Mark(t(100), 500.0))
+        assertEquals(250.0, Analysis.metersAt(tl, t(50)), 1e-9)
+        assertEquals(500.0, Analysis.metersAt(tl, t(200)), 1e-9)
+    }
+
+    @Test
+    fun `디커플링과 심박 드리프트`() {
+        // 같은 속도인데 후반 심박이 10% 높으면 디커플링 약 9%
+        val tl = (0..600L).map { SplitCalculator.Mark(t(it), it * 3.0) }
+        val hr = (0..600L).map { HrPoint(t(it), if (it < 300) 150 else 165) }
+        val (dec, drift) = Analysis.efficiency(tl, hr, t(0), t(600))!!
+        assertEquals((1 - 150.0 / 165.0) * 100, dec, 0.5)
+        assertEquals(15.0, drift, 0.5)
+    }
+
+    @Test
+    fun `TRIMP 는 강도가 높을수록 크다`() {
+        val easy = (0..1800L step 5).map { HrPoint(t(it), 130) }
+        val hard = (0..1800L step 5).map { HrPoint(t(it), 175) }
+        val e = Analysis.trimp(easy, t(1800), 60, 190, Sex.MALE)!!
+        val h = Analysis.trimp(hard, t(1800), 60, 190, Sex.MALE)!!
+        assertTrue(h > e * 1.5)
+        // 30분 × HRr 0.538 × 0.64 e^(1.92×0.538) ≈ 29
+        assertEquals(29.0, e, 2.0)
+    }
+
+    @Test
     fun `이동평균`() {
         val s = (0..9L).map { TimeValue(t(it), it.toDouble()) }
         val r = Analysis.rolling(s, 3)

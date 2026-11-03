@@ -69,11 +69,8 @@ object SplitCalculator {
         hr: List<HrPoint>,
         splitMeters: Double = 1000.0,
     ): List<Split> {
-        if (timeline.size < 2) return emptyList()
-        val rawTotal = timeline.last().meters
-        if (rawTotal <= 0) return emptyList()
-        val scale = if (totalMeters != null && totalMeters > 0) totalMeters / rawTotal else 1.0
-        val tl = timeline.map { it.copy(meters = it.meters * scale) }
+        val tl = scaled(timeline, totalMeters)
+        if (tl.size < 2) return emptyList()
 
         val splits = mutableListOf<Split>()
         var target = splitMeters
@@ -96,6 +93,15 @@ object SplitCalculator {
             splits += Split(splits.size + 1, rest, Duration.between(boundaryTime, end), avgHr(hr, boundaryTime, end), boundaryTime, end)
         }
         return splits
+    }
+
+    /** 마지막 누적 거리를 세션 총 거리에 맞춰 보정한 타임라인 (데이터 부족하면 빈 목록) */
+    fun scaled(timeline: List<Mark>, totalMeters: Double?): List<Mark> {
+        if (timeline.size < 2) return emptyList()
+        val rawTotal = timeline.last().meters
+        if (rawTotal <= 0) return emptyList()
+        val scale = if (totalMeters != null && totalMeters > 0) totalMeters / rawTotal else 1.0
+        return timeline.map { it.copy(meters = it.meters * scale) }
     }
 
     private fun avgHr(hr: List<HrPoint>, from: Instant, to: Instant): Long? {

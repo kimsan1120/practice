@@ -56,11 +56,15 @@ data class RunAnalysis(
     val recoverySeries: List<TimeValue>,
     val vo2Grade: String?,
     val age: Int?,
+    val metrics: RunMetrics,
+    /** TRIMP 계산에 쓴 안정시 심박과 출처 */
+    val restHrUsed: Int,
+    val restHrSource: String,
 )
 
 object Analysis {
 
-    fun analyze(d: RunDetail, profile: Profile): RunAnalysis {
+    fun analyze(d: RunDetail, profile: Profile, restHr: Long? = null): RunAnalysis {
         val s = d.summary
         val zone = ZoneId.systemDefault()
         val age = profile.ageAt(s.start.atZone(zone).year)
@@ -105,7 +109,129 @@ object Analysis {
             recoverySeries = recoverySeries(hrSamples, d.recoveryHr, s.end),
             vo2Grade = d.vo2Max?.let { v -> if (age != null && profile.sex != null) vo2Grade(v.value, age, profile.sex) else null },
             age = age,
+            metrics = metrics(d, maxHr, restHr?.toInt() ?: DEFAULT_REST_HR, profile.sex),
+            restHrUsed = restHr?.toInt() ?: DEFAULT_REST_HR,
+            restHrSource = if (restHr != null) "입력/Health Connect" else "기본값",
         )
+    }
+
+    const val DEFAULT_REST_HR = 60
+
+    // ---------- 베스트 기록 / 효율 / 부하 ----------
+
+    /** 통계·베스트 기록용 지표 계산 */
+    fun metrics(d: RunDetail, maxHr: Int?, restHr: Int, sex: Sex?): RunMetrics {
+        val s = d.summary
+        val tl = SplitCalculator.scaled(d.timeline, s.distanceMeters)
+        val best = BEST_EFFORT_DISTANCES.mapNotNull { m -> bestEffort(tl, m.toDouble())?.let { m to it.seconds } }.toMap()
+        val eff = efficiency(tl, d.heartRate, s.start, s.end)
+        val ef = if (s.distanceMeters != null && s.avgHr != null && s.activeDuration.seconds > 0)
+            (s.distanceMeters / (s.activeDuration.seconds / 60.0)) / s.avgHr else null
+        return RunMetrics(
+            id = s.id,
+            start = s.start,
+            distanceM = s.distanceMeters,
+            bestEfforts = best,
+            ef = ef,
+            decouplingPct = eff?.first,
+            hrDriftBpm = eff?.second,
+            trimp = maxHr?.let { trimp(d.heartRate, s.end, restHr, it, sex) },
+        )
+    }
+
+    /**
+     * 기록 안에서 target 미터를 가장 빨리 달린 시간.
+     * 시작점마다 target 만큼 더 간 시각을 보간해서 최소 시간을 찾는다 (투 포인터).
+     */
+    fun bestEffort(tl: List<SplitCalculator.Mark>, target: Double): Duration? {
+        if (tl.size < 2 || tl.last().meters < target) return null
+        var best: Long? = null
+        var j = 1
+        for (i in tl.indices) {
+            val need = tl[i].meters + target
+            if (j <= i) j = i + 1
+            while (j < tl.size && tl[j].meters < need) j++
+            if (j >= tl.size) break
+            val a = tl[j - 1]
+            val b = tl[j]
+            val t = if (b.meters - a.meters <= 0) b.time else {
+                val frac = (need - a.meters) / (b.meters - a.meters)
+                a.time.plusMillis((Duration.between(a.time, b.time).toMillis() * frac).toLong())
+            }
+            val ms = Duration.between(tl[i].time, t).toMillis()
+            if (ms > 0 && (best == null || ms < best)) best = ms
+        }
+        return best?.let { Duration.ofMillis(it) }
+    }
+
+    /**
+     * (유산소 디커플링 %, 심박 드리프트 bpm).
+     * 전반/후반의 (분당 거리 ÷ 평균 심박) 을 비교. 효율이 후반에 떨어질수록 + 값.
+     */
+    fun efficiency(tl: List<SplitCalculator.Mark>, hr: List<HrPoint>, start: Instant, end: Instant): Pair<Double, Double>? {
+        if (tl.size < 2) return null
+        val mid = start.plusMillis(Duration.between(start, end).toMillis() / 2)
+        val hr1 = hr.filter { it.time.isBefore(mid) }
+        val hr2 = hr.filter { !it.time.isBefore(mid) }
+        if (hr1.size < 10 || hr2.size < 10) return null
+        val d1 = metersAt(tl, mid) - metersAt(tl, start)
+        val d2 = metersAt(tl, end) - metersAt(tl, mid)
+        val min1 = Duration.between(start, mid).toMillis() / 60000.0
+        val min2 = Duration.between(mid, end).toMillis() / 60000.0
+        if (d1 <= 0 || d2 <= 0 || min1 <= 0 || min2 <= 0) return null
+        val a1 = hr1.map { it.bpm }.average()
+        val a2 = hr2.map { it.bpm }.average()
+        val ef1 = (d1 / min1) / a1
+        val ef2 = (d2 / min2) / a2
+        return ((ef1 - ef2) / ef1 * 100) to (a2 - a1)
+    }
+
+    /** 타임라인에서 시각 t 의 누적 거리 (선형 보간) */
+    fun metersAt(tl: List<SplitCalculator.Mark>, t: Instant): Double {
+        if (tl.isEmpty()) return 0.0
+        if (!t.isAfter(tl.first().time)) return tl.first().meters
+        if (!t.isBefore(tl.last().time)) return tl.last().meters
+        var lo = 0
+        var hi = tl.size - 1
+        while (hi - lo > 1) {
+            val m = (lo + hi) / 2
+            if (tl[m].time.isAfter(t)) hi = m else lo = m
+        }
+        val a = tl[lo]
+        val b = tl[hi]
+        val span = Duration.between(a.time, b.time).toMillis().toDouble()
+        if (span <= 0) return b.meters
+        return a.meters + (b.meters - a.meters) * Duration.between(a.time, t).toMillis() / span
+    }
+
+    /**
+     * 훈련 부하 (Banister TRIMP). 샘플마다 (분) × HRr × a·e^(b·HRr),
+     * HRr = (심박 − 안정시) ÷ (최대 − 안정시). 남성 a=0.64 b=1.92, 여성 a=0.86 b=1.67.
+     */
+    fun trimp(hr: List<HrPoint>, end: Instant, restHr: Int, maxHr: Int, sex: Sex?): Double? {
+        if (hr.size < 10 || maxHr <= restHr) return null
+        val (a, b) = if (sex == Sex.FEMALE) 0.86 to 1.67 else 0.64 to 1.92
+        var sum = 0.0
+        for (i in hr.indices) {
+            val next = hr.getOrNull(i + 1)?.time ?: end
+            val dtMin = min(Duration.between(hr[i].time, next).seconds, 10).coerceAtLeast(0) / 60.0
+            val hrr = ((hr[i].bpm - restHr).toDouble() / (maxHr - restHr)).coerceIn(0.0, 1.0)
+            sum += dtMin * hrr * a * kotlin.math.exp(b * hrr)
+        }
+        return sum
+    }
+
+    fun trimpLabel(t: Double): String = when {
+        t < 50 -> "가벼움"
+        t < 100 -> "보통"
+        t < 200 -> "높음"
+        else -> "매우 높음"
+    }
+
+    fun decouplingLabel(p: Double): String = when {
+        p < 5 -> "좋음 (유산소 지구력 안정)"
+        p < 10 -> "보통"
+        else -> "후반 효율 저하 큼"
     }
 
     // ---------- 평균 페이스 계산 근거 ----------

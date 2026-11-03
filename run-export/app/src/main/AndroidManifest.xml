@@ -16,6 +16,10 @@
     <!-- GPS 경로를 기록마다 묻지 않고 읽기 (Health Connect 설정에서 '항상 허용' 했을 때) -->
     <uses-permission android:name="android.permission.health.READ_EXERCISE_ROUTES" />
 
+    <!-- 새 러닝 알림: 앱을 안 켜도 15분마다 Health Connect 확인 -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- 기온 가져오기 (Open-Meteo). 버튼을 누를 때만 사용 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 권한을 준 시점보다 30일 이상 지난 기록 읽기 (지원되는 기기에서만 요청) -->
@@ -35,7 +39,8 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

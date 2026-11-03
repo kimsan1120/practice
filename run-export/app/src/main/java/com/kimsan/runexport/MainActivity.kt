@@ -12,6 +12,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
@@ -55,7 +57,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -76,15 +81,32 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+    /** 알림을 눌러서 들어왔을 때 열 기록 */
+    private var pendingSessionId by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { AppTheme { AppRoot() } }
+        pendingSessionId = intent?.getStringExtra(EXTRA_SESSION_ID)
+        setContent { AppTheme { AppRoot(pendingSessionId = pendingSessionId, onPendingConsumed = { pendingSessionId = null }) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra(EXTRA_SESSION_ID)?.let { pendingSessionId = it }
+    }
+
+    companion object {
+        const val EXTRA_SESSION_ID = "sessionId"
     }
 }
 
 @Composable
-fun AppRoot(vm: MainViewModel = viewModel()) {
+fun AppRoot(
+    vm: MainViewModel = viewModel(),
+    pendingSessionId: String? = null,
+    onPendingConsumed: () -> Unit = {},
+) {
     val state = vm.state
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
@@ -107,12 +129,32 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
         }
     }
 
-    BackHandler(enabled = state.detail != null || state.showSettings) {
-        if (state.showSettings) vm.openSettings(false) else vm.closeDetail()
+    // 알림에서 들어온 기록 열기
+    LaunchedEffect(pendingSessionId, state.hasPermission) {
+        if (pendingSessionId != null && state.hasPermission) {
+            vm.openById(pendingSessionId)
+            onPendingConsumed()
+        }
+    }
+
+    // 알림 권한 (Android 13+) → 허용 후 Health Connect 백그라운드 읽기 권한
+    val notifyPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        permissionLauncher.launch(vm.permissionsToRequest() + vm.backgroundPermissions())
+    }
+
+    BackHandler(enabled = state.detail != null || state.showSettings || state.showStats) {
+        when {
+            state.showSettings -> vm.openSettings(false)
+            state.detail != null -> vm.closeDetail()
+            else -> vm.openStats(false)
+        }
     }
 
     val bundle = if (state.detail != null && state.analysis != null)
-        ExportBundle(state.detail, state.analysis, state.notes, state.weather, state.profile) else null
+        ExportBundle(
+            state.detail, state.analysis, state.notes, state.weather, state.profile,
+            compare = state.compare, compareMetrics = state.compareMetrics, pbs = state.pbs,
+        ) else null
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -124,14 +166,21 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                         when {
                             state.showSettings -> "설정"
                             bundle != null -> "기록 상세"
+                            state.showStats -> "통계"
                             else -> "러닝 기록"
                         },
                         fontWeight = FontWeight.ExtraBold,
                     )
                 },
                 navigationIcon = {
-                    if (state.showSettings || bundle != null) {
-                        IconButton(onClick = { if (state.showSettings) vm.openSettings(false) else vm.closeDetail() }) {
+                    if (state.showSettings || bundle != null || state.showStats) {
+                        IconButton(onClick = {
+                            when {
+                                state.showSettings -> vm.openSettings(false)
+                                bundle != null -> vm.closeDetail()
+                                else -> vm.openStats(false)
+                            }
+                        }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "뒤로")
                         }
                     }
@@ -140,6 +189,11 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                     if (bundle != null && !state.showSettings) {
                         IconButton(onClick = { Exporter.share(context, Exporter.filesForRun(bundle)) }) {
                             Icon(Icons.Filled.Share, contentDescription = "공유")
+                        }
+                    }
+                    if (!state.showSettings && bundle == null && !state.showStats && state.hasPermission) {
+                        IconButton(onClick = { vm.openStats(true) }) {
+                            Icon(Icons.Filled.DateRange, contentDescription = "통계")
                         }
                     }
                     if (!state.showSettings && state.hasPermission) {
@@ -163,6 +217,12 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                     profile = state.profile,
                     onSave = vm::saveProfile,
                     onOpenHealthConnect = { openHealthConnectSettings(context) },
+                    backgroundSupported = vm.backgroundSupported(),
+                    backgroundGranted = state.backgroundGranted,
+                    onEnableNotify = {
+                        if (Build.VERSION.SDK_INT >= 33) notifyPermLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                        else permissionLauncher.launch(vm.permissionsToRequest() + vm.backgroundPermissions())
+                    },
                 )
                 bundle != null -> DetailScreen(
                     bundle = bundle,
@@ -176,6 +236,21 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                     onCopy = {
                         Exporter.copyToClipboard(context, Exporter.analysisText(bundle))
                         vm.showMessage("분석용 텍스트를 복사했어요. 채팅창에 붙여넣기 하세요.")
+                    },
+                )
+                state.showStats -> StatsScreen(
+                    stats = state.stats,
+                    profile = state.profile,
+                    onMode = vm::setStatsMode,
+                    onSelect = vm::selectPeriod,
+                    onOpenRun = vm::open,
+                    onAnalyzeAll = vm::analyzeAll,
+                    onExport = { runs, _ ->
+                        val stamp = LocalDate.now().toString().replace("-", "")
+                        Exporter.share(
+                            context,
+                            listOf(Exporter.ExportFile("runs_period_${stamp}.csv", "text/csv", Exporter.periodCsv(runs, state.stats.metrics))),
+                        )
                     },
                 )
                 else -> ListScreen(

@@ -36,6 +36,7 @@ import kotlin.reflect.KClass
 class HealthRepository(private val context: Context) {
 
     private val client: HealthConnectClient by lazy { HealthConnectClient.getOrCreate(context) }
+    private val prefs = Prefs(context)
 
     fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context)
 
@@ -59,8 +60,64 @@ class HealthRepository(private val context: Context) {
         return readAll(ExerciseSessionRecord::class, start, end)
             .filter { !runningOnly || it.exerciseType in RUNNING_TYPES }
             .sortedBy { it.startTime }
-            .map { summarize(it, granted) }
+            .map { rec ->
+                summarize(rec, granted).also {
+                    if (rec.exerciseType in RUNNING_TYPES) prefs.saveSummary(it, rec.metadata.lastModifiedTime.toEpochMilli())
+                }
+            }
     }
+
+    /**
+     * 기간 안의 러닝 요약 (통계용). 바뀌지 않은 기록은 저장해둔 요약을 그대로 쓴다.
+     */
+    suspend fun readRunsRange(from: Instant, to: Instant, onProgress: (Int, Int) -> Unit = { _, _ -> }): List<RunSummary> {
+        val granted = grantedPermissions()
+        val sessions = readAll(ExerciseSessionRecord::class, from, to)
+            .filter { it.exerciseType in RUNNING_TYPES }
+            .sortedBy { it.startTime }
+        val cache = prefs.summaries()
+        return sessions.mapIndexed { i, rec ->
+            onProgress(i + 1, sessions.size)
+            val mod = rec.metadata.lastModifiedTime.toEpochMilli()
+            cache[rec.metadata.id]?.takeIf { it.second == mod }?.first
+                ?: summarize(rec, granted).also { prefs.saveSummary(it, mod) }
+        }
+    }
+
+    /** 세션 ID 로 요약 (알림에서 열 때) */
+    suspend fun summaryById(id: String): RunSummary? = runCatching {
+        summarize(client.readRecord(ExerciseSessionRecord::class, id).record, grantedPermissions())
+    }.getOrNull()
+
+    /** 백그라운드 알림용: 마지막 확인 이후 새로 들어온 러닝 세션 */
+    suspend fun newRunsSince(token: String?): Pair<List<RunSummary>, String> {
+        val t = token ?: return emptyList<RunSummary>() to client.getChangesToken(
+            androidx.health.connect.client.request.ChangesTokenRequest(setOf(ExerciseSessionRecord::class))
+        )
+        val granted = grantedPermissions()
+        val out = mutableListOf<RunSummary>()
+        var next = t
+        while (true) {
+            val resp = client.getChanges(next)
+            if (resp.changesTokenExpired) {
+                return out to client.getChangesToken(
+                    androidx.health.connect.client.request.ChangesTokenRequest(setOf(ExerciseSessionRecord::class))
+                )
+            }
+            resp.changes.filterIsInstance<androidx.health.connect.client.changes.UpsertionChange>()
+                .mapNotNull { it.record as? ExerciseSessionRecord }
+                .filter { it.exerciseType in RUNNING_TYPES }
+                .forEach { out += summarize(it, granted) }
+            next = resp.nextChangesToken
+            if (!resp.hasMore) break
+        }
+        return out.distinctBy { it.id } to next
+    }
+
+    fun backgroundReadSupported(): Boolean = runCatching {
+        client.features.getFeatureStatus(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND) ==
+            HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+    }.getOrDefault(false)
 
     private suspend fun summarize(s: ExerciseSessionRecord, granted: Set<String>): RunSummary {
         val metrics = buildSet<AggregateMetric<*>> {
@@ -129,7 +186,7 @@ class HealthRepository(private val context: Context) {
     }
 
     /** 세션 하나의 상세 데이터 (심박/속도 샘플, 경로, 구간) */
-    suspend fun readDetail(summary: RunSummary): RunDetail {
+    suspend fun readDetail(summary: RunSummary, full: Boolean = true): RunDetail {
         val session = client.readRecord(ExerciseSessionRecord::class, summary.id).record
         val granted = grantedPermissions()
         val start = session.startTime
@@ -164,7 +221,7 @@ class HealthRepository(private val context: Context) {
             r.distance.inMeters * ov / span
         }
         // 모든 앱 기준 거리 집계 (세션 앱 기준은 summary.distanceMeters)
-        val distanceAll = if (hasDistance) aggregateOrNull(
+        val distanceAll = if (full && hasDistance) aggregateOrNull(
             setOf(DistanceRecord.DISTANCE_TOTAL), TimeRangeFilter.between(start, end), emptySet()
         )?.get(DistanceRecord.DISTANCE_TOTAL)?.inMeters else null
         val durationAgg = aggregateOrNull(
@@ -180,7 +237,7 @@ class HealthRepository(private val context: Context) {
         }
 
         // 걸음 / 케이던스 (StepsCadence 도 READ_STEPS 권한을 씀)
-        val hasSteps = has(granted, StepsRecord::class)
+        val hasSteps = full && has(granted, StepsRecord::class)
         val cadence = if (hasSteps) safe {
             readPreferOrigin(StepsCadenceRecord::class, start, end, origin)
                 .flatMap { r -> r.samples.map { CadencePoint(it.time, it.rate) } }
@@ -192,7 +249,7 @@ class HealthRepository(private val context: Context) {
 
         // 회복 심박: 종료 후 3분 (모든 앱)
         val recoveryEnd = end.plusSeconds(180)
-        val recovery = if (has(granted, HeartRateRecord::class)) safe {
+        val recovery = if (full && has(granted, HeartRateRecord::class)) safe {
             readAll(HeartRateRecord::class, end, recoveryEnd)
                 .flatMap { r -> r.samples.map { HrPoint(it.time, it.beatsPerMinute) } }
                 .filter { it.time.isAfter(end) && !it.time.isAfter(recoveryEnd) }
@@ -204,7 +261,7 @@ class HealthRepository(private val context: Context) {
         val day = start.atZone(zone).toLocalDate()
         val dayStart = day.atStartOfDay(zone).toInstant()
         val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant()
-        val hasVo2 = has(granted, Vo2MaxRecord::class)
+        val hasVo2 = full && has(granted, Vo2MaxRecord::class)
         val vo2History = if (hasVo2) safe {
             readAll(Vo2MaxRecord::class, end.minus(Duration.ofDays(180)), end.plus(Duration.ofHours(12)))
                 .map { Vo2Point(it.time, it.vo2MillilitersPerMinuteKilogram) }
@@ -215,13 +272,13 @@ class HealthRepository(private val context: Context) {
             .minByOrNull { kotlin.math.abs(Duration.between(it.time, end).seconds) }
 
         // 그날 안정시 심박 (가장 이른 값 = 아침)
-        val hasRest = has(granted, RestingHeartRateRecord::class)
+        val hasRest = full && has(granted, RestingHeartRateRecord::class)
         val resting = if (hasRest) safe {
             readAll(RestingHeartRateRecord::class, dayStart, dayEnd).sortedBy { it.time }
         } else emptyList()
 
         // 운동 전 90일 안의 가장 최근 체중
-        val hasWeight = has(granted, WeightRecord::class)
+        val hasWeight = full && has(granted, WeightRecord::class)
         val weights = if (hasWeight) safe {
             readAll(WeightRecord::class, end.minus(Duration.ofDays(90)), end)
         } else emptyList()
@@ -357,7 +414,7 @@ class HealthRepository(private val context: Context) {
             )
             for ((label, timeline) in candidates) {
                 val splits = SplitCalculator.compute(timeline, d.summary.distanceMeters, d.heartRate)
-                if (splits.isNotEmpty()) return d.copy(splits = splits, splitSource = label)
+                if (splits.isNotEmpty()) return d.copy(splits = splits, splitSource = label, timeline = timeline)
             }
             // 경로가 새로 붙었는데 계산이 안 되면 기존 구간 유지
             return if (d.splits.isNotEmpty()) d else d.copy(splits = emptyList(), splitSource = "")
