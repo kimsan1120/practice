@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 간단한 '달리는 화살표 + 그래프' 모양 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,70 L44,56 L54,64 L72,42 L72,50 L78,50 L78,34 L62,34 L62,40 L69,40 L54,58 L44,50 L26,66 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,74 L78,74 L78,78 L30,78 Z" />
+</vector>
