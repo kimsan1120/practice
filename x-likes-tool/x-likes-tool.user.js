@@ -237,6 +237,7 @@
       #x-likes-tool button.danger:hover:not(:disabled){background:#dc1e29}
       #x-likes-tool .warn{color:#b8860b;font-size:12px;margin-bottom:6px}
       #x-likes-tool.collapsed .body{display:none}
+      @media (max-width: 600px){ #x-likes-tool{bottom:72px;right:8px} } /* 모바일 하단 탭바 피하기 */
       @media (prefers-color-scheme: dark){
         #x-likes-tool{background:#15202b;color:#e7e9ea;border-color:#38444d}
         #x-likes-tool button.b{background:#15202b;color:#e7e9ea;border-color:#536471}
