@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         X 좋아요 링크 수집 & 일괄 해제
 // @namespace    https://github.com/kimsan1120/practice
-// @version      1.0.0
-// @description  x.com/<내아이디>/likes 페이지에서 좋아요한 게시물 링크를 수집(TXT/CSV/JSON)하고, 버튼 한 번으로 좋아요를 모두 해제합니다.
+// @version      1.1.0
+// @description  X 좋아요 페이지(x.com/i/history/likes 또는 x.com/<아이디>/likes)에서 좋아요한 게시물 링크를 수집(TXT/CSV/JSON)하고, 버튼 한 번으로 좋아요를 모두 해제합니다.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/kimsan1120/practice/claude/lucid-bohr-xd6mrc/x-likes-tool/x-likes-tool.user.js
+// @downloadURL  https://raw.githubusercontent.com/kimsan1120/practice/claude/lucid-bohr-xd6mrc/x-likes-tool/x-likes-tool.user.js
 // @grant        none
 // ==/UserScript==
 
@@ -55,7 +57,8 @@
   // ---------------- 유틸 ----------------
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
-  const isLikesPage = () => /^\/[^/]+\/likes\/?$/.test(location.pathname);
+  // 새 주소: /i/history/likes, 예전 주소: /<아이디>/likes
+  const isLikesPage = () => /^\/(i\/history|[^/]+)\/likes\/?$/.test(location.pathname);
 
   /** 게시물(article)에서 링크·작성자·시간·본문 추출. 인용 트윗이 아닌 본 게시물의 시간 링크를 사용 */
   function parseArticle(article) {
@@ -266,7 +269,7 @@
 
   function render() {
     const onLikes = isLikesPage();
-    $('[data-el="warn"]').textContent = onLikes ? '' : '⚠️ x.com/내아이디/likes 페이지로 이동하세요.';
+    $('[data-el="warn"]').textContent = onLikes ? '' : '⚠️ x.com/i/history/likes 페이지로 이동하세요.';
     $('[data-el="count"]').textContent = `${items.size}개`;
     const busy = !!running;
     $('[data-act="collect"]').disabled = busy || !onLikes;

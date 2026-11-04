@@ -1,6 +1,6 @@
 # X(트위터) 좋아요 링크 수집 & 일괄 해제
 
-`x.com/<내아이디>/likes` 페이지에 작은 패널을 띄워서:
+X 좋아요 페이지(`x.com/i/history/likes`, 예전 주소 `x.com/<내아이디>/likes`)에 작은 패널을 띄워서:
 
 1. **링크 수집**: 자동으로 스크롤하며 좋아요한 게시물 링크를 모두 모읍니다 → TXT / CSV / JSON 다운로드, 클립보드 복사
 2. **좋아요 모두 해제**: 버튼 한 번으로 위에서부터 차례로 좋아요를 해제합니다 (해제 직전에 링크를 자동 저장)
@@ -20,13 +20,13 @@
 
 1. 브라우저에 [Tampermonkey](https://www.tampermonkey.net/) 확장 설치
 2. Tampermonkey 대시보드 → `+`(새 스크립트) → `x-likes-tool.user.js` 내용을 붙여넣고 저장
-3. x.com에 로그인 → 프로필 → **좋아요** 탭 (`https://x.com/<내아이디>/likes`)
+3. x.com에 로그인 → 프로필 → **좋아요** 탭 (`https://x.com/i/history/likes`)
 4. 오른쪽 아래 패널에서 **링크 수집** → 끝나면 **TXT / CSV / JSON**으로 저장
 5. 필요하면 **좋아요 모두 해제**
 
 ### 방법 B: 콘솔에 붙여넣기 (설치 없이 1회용)
 
-1. `https://x.com/<내아이디>/likes` 열기
+1. `https://x.com/i/history/likes` 열기
 2. `F12` → Console 탭
 3. `x-likes-tool.user.js` 내용 전체를 붙여넣고 Enter
    (Chrome이 붙여넣기를 막으면 콘솔에 `allow pasting` 을 먼저 입력)
