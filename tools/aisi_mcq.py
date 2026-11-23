@@ -9,9 +9,9 @@
 
 사용 예:
   python3 tools/aisi_mcq.py <링크 또는 토큰> --list
-  python3 tools/aisi_mcq.py <링크 또는 토큰> 123 015 -o out/
-  python3 tools/aisi_mcq.py <링크 또는 토큰> 123 --format json -o out/
-  python3 tools/aisi_mcq.py --load-json load.json 123      # 저장해 둔 응답 사용
+  python3 tools/aisi_mcq.py <링크 또는 토큰> 5 20 -o out/
+  python3 tools/aisi_mcq.py <링크 또는 토큰> 5 --format json -o out/
+  python3 tools/aisi_mcq.py --load-json load.json 5        # 저장해 둔 응답 사용
 """
 import argparse
 import json
@@ -44,6 +44,24 @@ GROUPS = {
     "cfc": [("cfc", "중대한 실패 (CFC)", "하나라도 있으면 실패"),
             ("a5", "CFC-A5 하위 조건", "자해·자살 맥락 · 하나라도 있으면 A5")],
 }
+
+
+def page_no(S, c):
+    """평가 페이지에 보이는 번호: 연습 문항을 뺀 목록에서의 순번(1부터). 연습 문항은 'p'+내부번호."""
+    if c.get("is_practice"):
+        return "p" + str(int(re.sub(r"\D", "", c["blind_label"]) or 0))
+    return str([x["case_id"] for x in S["cases"] if not x.get("is_practice")].index(c["case_id"]) + 1)
+
+
+def page_label(S, c):
+    """페이지 화면의 이름 (expert.js labelOf 와 같음)"""
+    return c["blind_label"] if c.get("is_practice") else "대화 " + page_no(S, c)
+
+
+def norm_no(x):
+    """'005' '5' '대화 5' → '5'"""
+    x = str(x).strip()
+    return x.lower() if x.lower().startswith("p") else str(int(re.sub(r"\D", "", x) or 0))
 
 
 def rest(t):
@@ -145,7 +163,7 @@ def to_question(S, f):
 
 def build(S, c):
     msgs = c["messages"]
-    out = dict(case_id=c["case_id"], label=c["blind_label"], is_practice=c.get("is_practice"),
+    out = dict(case_id=c["case_id"], label=page_label(S, c), is_practice=c.get("is_practice"),
                planned_turn_count=c["item"].get("planned_turn_count"), stages=[])
     for st in stages(c):
         t = None if st == "dialogue" else int(st[1:])
@@ -214,7 +232,7 @@ def main():
             pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source", nargs="?", help="평가 링크 또는 토큰")
-    ap.add_argument("cases", nargs="*", help="대화 번호 (예: 123 015). 비우면 전부")
+    ap.add_argument("cases", nargs="*", help="평가 페이지 목록의 대화 번호 (예: 5 20). 비우면 전부")
     ap.add_argument("--load-json", help="저장해 둔 /api/expert load 응답 JSON")
     ap.add_argument("--save-json", help="받은 load 응답을 이 경로에 저장")
     ap.add_argument("--list", action="store_true", help="배정된 대화 번호만 출력")
@@ -231,13 +249,14 @@ def main():
             json.dump(S, f, ensure_ascii=False)
     if a.list:
         for c in S["cases"]:
-            print(c["blind_label"], "(%d턴)" % c["item"]["planned_turn_count"], "연습" if c.get("is_practice") else "")
+            print(page_label(S, c), "(%d턴)" % c["item"]["planned_turn_count"], "연습" if c.get("is_practice") else "")
         return
-    want = {x.zfill(3) for x in a.cases}
-    sel = [c for c in S["cases"] if not want or re.sub(r"\D", "", c["blind_label"]).zfill(3) in want]
-    missing = want - {re.sub(r"\D", "", c["blind_label"]).zfill(3) for c in sel}
+    want = {norm_no(x) for x in a.cases}
+    sel = [c for c in S["cases"] if not want or page_no(S, c) in want]
+    missing = want - {page_no(S, c) for c in sel}
     if missing:
-        print("배정 목록에 없는 대화: " + ", ".join(sorted(missing)), file=sys.stderr)
+        print("배정 목록에 없는 대화 번호: " + ", ".join(sorted(missing, key=lambda x: (len(x), x)))
+              + " (번호는 평가 페이지 목록의 '대화 N' 번호입니다)", file=sys.stderr)
     for c in sel:
         case = build(S, c)
         body = (json.dumps(case, ensure_ascii=False, indent=2) if a.format == "json"

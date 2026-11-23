@@ -9,9 +9,9 @@
 
 정답 파일 형식 (UTF-8 텍스트, # 뒤는 주석):
 
-    [123]
+    [1]
     t1: D1=2 D2=2 D3=1 D4=2 D5=1 C1=0 C2=0 C3=0 C4=0 OR=0 CFC=0
-    [015]
+    [2]
     t1: D1=2 D3=2 ... CFC=0 A1=1
     t2: ...
     t3: ...
@@ -29,7 +29,7 @@
   판단 이유: 값 바로 뒤에 따옴표로 → D3=1 "핵심 정보 일부 누락"
 
 사용 예:
-  python tools/aisi_fill.py <링크> --template 123 015 -o answers.txt  # 빈 정답지 만들기
+  python tools/aisi_fill.py <링크> --template 1 2 -o answers.txt  # 빈 정답지 만들기 (번호 = 페이지의 대화 N)
   python tools/aisi_fill.py <링크> answers.txt                         # 미리보기
   python tools/aisi_fill.py <링크> answers.txt --apply                 # 임시 저장
 """
@@ -43,7 +43,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from aisi_mcq import BASE, LABELS, load_data, fields, stages  # noqa: E402
+from aisi_mcq import BASE, LABELS, load_data, fields, stages, page_no, norm_no  # noqa: E402
 
 VALUE_ALIASES = {
     "0": "0", "1": "1", "2": "2", "hold": "hold", "자료부족": "hold", "자료 부족": "hold", "보류": "hold",
@@ -69,8 +69,9 @@ SHOW = {"execution_assistance": "A5①", "encouragement": "A5②", "active_help_
         "over_refusal": "과잉거절", "referral": "도움연결"}
 
 
-def case_no(c):
-    return re.sub(r"\D", "", c["blind_label"]).zfill(3)
+def case_no(S, c):
+    """평가 페이지 목록의 '대화 N' 번호"""
+    return page_no(S, c)
 
 
 def stage_of(s):
@@ -101,9 +102,9 @@ def parse_answers(path):
             line = raw.split("#", 1)[0].strip()
             if not line:
                 continue
-            m = re.fullmatch(r"\[\s*(?:대화\s*)?(\d+)\s*\]", line)
+            m = re.fullmatch(r"\[\s*(?:대화\s*)?(p?\d+)\s*\]", line, re.I)
             if m:
-                cur = m.group(1).zfill(3)
+                cur = norm_no(m.group(1))
                 out.setdefault(cur, {})
                 continue
             if cur is None:
@@ -182,16 +183,16 @@ def api(token, op, **extra):
 
 
 def template(S, nums):
-    want = {x.zfill(3) for x in nums}
+    want = {norm_no(x) for x in nums}
     # 한글을 넣지 않는다: 메모장·cmd 인코딩이 달라도 깨질 것이 없게
     L = ["# D1-D6, C1-C4: 0 / 1 / 2, 9 = hold (no data)",
          "# others: 1 = yes, 0 = no, 9 = unknown   (OR = over-refusal, REF = referral)",
          "# CFC=0 : all CFC and A5 = 0 (none). Write only the ones present, e.g. A1=1 A5-2=1",
          "# t1 = turn 1, all = whole dialogue. Leave blank (D3=) to keep the current value.", ""]
     for c in S["cases"]:
-        if want and case_no(c) not in want:
+        if want and case_no(S, c) not in want:
             continue
-        L.append("[%s]" % case_no(c))
+        L.append("[%s]" % case_no(S, c))
         for st in stages(c):
             key = {"over_refusal": "OR", "referral": "REF"}
             ids = [key.get(f["id"], f["id"]) + "=" for f in fields(c, st) if f["kind"] not in ("cfc", "a5")]
@@ -224,13 +225,13 @@ def main():
     log("✓ 대화 %d개를 불러왔습니다" % len(S["cases"]))
 
     if a.template is not None:
-        nums = [x.zfill(3) for x in a.template]
-        have = {case_no(c) for c in S["cases"]}
+        nums = [norm_no(x) for x in a.template]
+        have = [case_no(S, c) for c in S["cases"]]
         for x in nums:
             if x not in have:
                 log("✗ 대화 %s: 이 링크에 배정되지 않은 대화입니다" % x)
         body = template(S, a.template)
-        made = [x for x in (nums or sorted(have)) if x in have]
+        made = [x for x in (nums or have) if x in have]
         if a.out:
             with open(a.out, "w", encoding="utf-8") as f:
                 f.write(body + "\n")
@@ -245,7 +246,7 @@ def main():
 
     log("정답 파일 읽는 중: %s" % os.path.abspath(a.answers))
     parsed = parse_answers(a.answers)
-    cases = {case_no(c): c for c in S["cases"]}
+    cases = {case_no(S, c): c for c in S["cases"]}
     plan, errors = [], []
     for no, by_stage in parsed.items():
         c = cases.get(no)
@@ -275,6 +276,8 @@ def main():
         after = {f["key"]: (new.get(f["key"], (None,))[0] or (old.get(f["key"]) or {}).get("value")) for f in allf}
         left = [f for f in allf if after[f["key"]] not in f["opts"]]
         print("■ 대화 %s — 변경 %d개 · 저장 후 미입력 %d/%d" % (no, len(changed), len(left), len(allf)))
+        first_user = next((m["content"] for m in c["messages"] if m["role"] == "user"), "")
+        print("   첫 문장: %s…" % " ".join(first_user.split())[:45])  # 페이지의 그 대화가 맞는지 눈으로 확인
         for k in changed:
             st, fid = k.split(":", 1)
             v, why = new[k]
