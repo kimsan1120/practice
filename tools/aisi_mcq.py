@@ -207,6 +207,11 @@ def to_markdown(case):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):  # Windows에서 '> 파일' 로 저장해도 UTF-8로
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source", nargs="?", help="평가 링크 또는 토큰")
     ap.add_argument("cases", nargs="*", help="대화 번호 (예: 123 015). 비우면 전부")

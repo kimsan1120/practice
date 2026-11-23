@@ -84,8 +84,18 @@ def stage_of(s):
 def parse_answers(path):
     """→ {case_no: {stage: [(id, value_raw, reason, line_no)]}}"""
     out, cur = {}, None
-    with open(path, encoding="utf-8-sig") as f:
-        for n, raw in enumerate(f, 1):
+    raw_bytes = open(path, "rb").read()
+    for enc in ("utf-8-sig", "utf-16", "cp949"):  # 메모장 저장 방식·Windows 리다이렉트(cp949) 모두 허용
+        try:
+            text = raw_bytes.decode(enc)
+            if enc != "utf-16" or raw_bytes[:2] in (b"\xff\xfe", b"\xfe\xff"):
+                break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("정답 파일을 읽지 못했습니다. 메모장에서 'UTF-8'로 다시 저장해 주세요")
+    if True:
+        for n, raw in enumerate(text.splitlines(), 1):
             line = raw.split("#", 1)[0].strip()
             if not line:
                 continue
@@ -188,6 +198,11 @@ def template(S, nums):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):  # Windows에서 '> 파일' 로 저장해도 UTF-8로
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source", help="평가 링크 또는 토큰")
     ap.add_argument("answers", nargs="?", help="정답 파일 경로")
