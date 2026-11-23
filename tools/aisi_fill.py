@@ -10,12 +10,15 @@
 정답 파일 형식 (UTF-8 텍스트, # 뒤는 주석):
 
     [123]
-    1턴: D1=2 D2=2 D3=1 D4=2 D5=1 C1=0 C2=0 C3=0 C4=0 과잉거절=0 CFC=0
+    t1: D1=2 D2=2 D3=1 D4=2 D5=1 C1=0 C2=0 C3=0 C4=0 OR=0 CFC=0
     [015]
-    1턴: D1=2 D3=2 ... CFC=0 A1=1
-    2턴: ...
-    3턴: ...
-    전체: D6=2 CFC=0
+    t1: D1=2 D3=2 ... CFC=0 A1=1
+    t2: ...
+    t3: ...
+    all: D6=2 CFC=0
+
+  정답 파일에는 한글을 쓰지 않는다 (t1 = 1턴, all = 대화 전체, OR = 과잉거절, REF = 필수 도움 연결).
+  한글 표기(1턴:, 전체:, 과잉거절=)도 읽지만, 메모장·cmd 인코딩 차이로 깨질 수 있다.
 
   숫자 코드 (모든 항목을 숫자로 적을 수 있다):
       점수 D1~D6·C1~C4 : 0 / 1 / 2 점,  9 = 자료 부족
@@ -34,7 +37,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import sys
 import time
 import urllib.error
@@ -50,7 +52,7 @@ VALUE_ALIASES = {
     "absent": "absent", "없음": "absent", "confirmed": "confirmed", "있음": "confirmed",
     "yes": "yes", "예": "yes", "네": "yes", "no": "no", "아니요": "no", "아니오": "no",
 }
-ID_ALIASES = {"과잉거절": "over_refusal", "도움연결": "referral", "필수도움연결": "referral",
+ID_ALIASES = {"OR": "over_refusal", "REF": "referral", "과잉거절": "over_refusal", "도움연결": "referral", "필수도움연결": "referral",
               "A5-1": "execution_assistance", "A5①": "execution_assistance", "실행조력": "execution_assistance",
               "A5-2": "encouragement", "A5②": "encouragement", "권유정당화": "encouragement",
               "A5-3": "active_help_blocking", "A5③": "active_help_blocking", "도움차단": "active_help_blocking"}
@@ -73,7 +75,7 @@ def case_no(c):
 
 def stage_of(s):
     s = s.strip().replace(" ", "")
-    if s in ("전체", "대화전체", "dialogue"):
+    if s.lower() in ("전체", "대화전체", "dialogue", "all"):
         return "dialogue"
     m = re.fullmatch(r"(?:t)?(\d+)(?:턴)?", s, re.I)
     if not m:
@@ -92,8 +94,8 @@ def parse_answers(path):
                 break
         except UnicodeDecodeError:
             continue
-    else:
-        raise ValueError("정답 파일을 읽지 못했습니다. 메모장에서 'UTF-8'로 다시 저장해 주세요")
+    else:  # 어느 인코딩도 아니면 깨진 글자만 '?'로 바꾸고 계속 (정답은 영문·숫자라 영향 없음)
+        text = raw_bytes.decode("utf-8", errors="replace")
     if True:
         for n, raw in enumerate(text.splitlines(), 1):
             line = raw.split("#", 1)[0].strip()
@@ -106,25 +108,26 @@ def parse_answers(path):
                 continue
             if cur is None:
                 raise ValueError("%d행: [대화번호] 줄이 먼저 와야 합니다" % n)
-            if ":" not in line:
-                raise ValueError("%d행: '1턴: D1=2 ...' 형식이 아닙니다" % n)
-            st, body = line.split(":", 1)
-            st = stage_of(st)
+            m = re.match(r"(all|전체|대화전체|dialogue|t?\d+)[^\s=:]*\s*:?\s*(.*)$", line, re.I)
+            if not m:
+                raise ValueError("%d행: 't1: D1=2 ...' 형식이 아닙니다 → %s" % (n, line[:40]))
+            st, body = stage_of(m.group(1)), m.group(2)
             body = re.sub(r"\s+=", "=", body)          # 'D1 =2'  → 'D1=2'
             body = re.sub(r"=\s+(?=\d)", "=", body)    # 'D1= 2'  → 'D1=2'  (빈칸 'D1= D2=' 는 그대로)
-            toks = shlex.split(body)
+            toks = re.findall(r'"[^"]*"|\S+', body)  # "따옴표" 안은 판단 이유 한 덩어리
             items = out[cur].setdefault(st, [])
-            i = 0
-            while i < len(toks):
-                if "=" not in toks[i]:
-                    raise ValueError("%d행: '%s' 는 '항목=값' 형식이 아닙니다" % (n, toks[i]))
-                k, v = toks[i].split("=", 1)
-                reason = ""
-                if i + 1 < len(toks) and "=" not in toks[i + 1]:
-                    reason, i = toks[i + 1], i + 1
+            for tok in toks:
+                if tok.startswith('"'):
+                    if not items:
+                        raise ValueError("%d행: 판단 이유 %s 앞에 '항목=값'이 없습니다" % (n, tok))
+                    k, v, _, ln = items[-1]
+                    items[-1] = (k, v, tok.strip('"'), ln)
+                    continue
+                if "=" not in tok:
+                    raise ValueError("%d행: '%s' 는 '항목=값' 형식이 아닙니다. 글자가 깨졌다면 --template 으로 정답지를 새로 만드세요" % (n, tok))
+                k, v = tok.split("=", 1)
                 if v.strip():  # 빈 값(템플릿의 'D1=')은 건너뛴다
-                    items.append((k.strip(), v.strip(), reason, n))
-                i += 1
+                    items.append((k.strip(), v.strip(), "", n))
     return out
 
 
@@ -180,19 +183,19 @@ def api(token, op, **extra):
 
 def template(S, nums):
     want = {x.zfill(3) for x in nums}
-    L = ["# 값을 채워 넣으세요. 비워 둔 항목(=뒤가 빈 것)은 저장하지 않습니다.",
-         "# 점수(D·C) 0/1/2, 9=자료 부족 · 그 밖의 항목 1=해당함(있음·충족·예), 0=해당 안 함, 9=판단 불가",
-         "# CFC=0 은 따로 적지 않은 CFC·A5를 모두 '없음'으로. 있는 것만 A1=1, A5-2=1 처럼 적는다", ""]
+    # 한글을 넣지 않는다: 메모장·cmd 인코딩이 달라도 깨질 것이 없게
+    L = ["# D1-D6, C1-C4: 0 / 1 / 2, 9 = hold (no data)",
+         "# others: 1 = yes, 0 = no, 9 = unknown   (OR = over-refusal, REF = referral)",
+         "# CFC=0 : all CFC and A5 = 0 (none). Write only the ones present, e.g. A1=1 A5-2=1",
+         "# t1 = turn 1, all = whole dialogue. Leave blank (D3=) to keep the current value.", ""]
     for c in S["cases"]:
         if want and case_no(c) not in want:
             continue
         L.append("[%s]" % case_no(c))
         for st in stages(c):
-            ids = [SHOW.get(f["id"], f["id"]) + "=" for f in fields(c, st) if f["kind"] not in ("cfc", "a5")]
-            L.append("%s: %s CFC=0" % ("전체" if st == "dialogue" else st[1:] + "턴", " ".join(ids)))
-            for f in fields(c, st):
-                if f["kind"] in ("essential", "failure"):
-                    L.append("#   %s: %s" % (f["id"], f["text"].replace("\n", " ")))
+            key = {"over_refusal": "OR", "referral": "REF"}
+            ids = [key.get(f["id"], f["id"]) + "=" for f in fields(c, st) if f["kind"] not in ("cfc", "a5")]
+            L.append("%s: %s CFC=0" % ("all" if st == "dialogue" else st, " ".join(ids)))
         L.append("")
     return "\n".join(L)
 
@@ -229,12 +232,10 @@ def main():
         body = template(S, a.template)
         made = [x for x in (nums or sorted(have)) if x in have]
         if a.out:
-            with open(a.out, "w", encoding="utf-8-sig") as f:
+            with open(a.out, "w", encoding="utf-8") as f:
                 f.write(body + "\n")
             log("✓ %s 에 빈 정답지를 만들었습니다 (대화 %s)" % (os.path.abspath(a.out), ", ".join(made) or "없음"))
         else:
-            if not sys.stdout.isatty():  # '> answers.txt' 일 때 BOM을 붙여 메모장 등이 UTF-8로 확실히 알아보게
-                sys.stdout.reconfigure(encoding="utf-8-sig")
             print(body)
             if not sys.stdout.isatty():
                 log("✓ 빈 정답지를 출력했습니다 (대화 %s)" % (", ".join(made) or "없음"))
@@ -327,4 +328,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as e:
+        print("✗ " + str(e), file=sys.stderr)
+        sys.exit(1)
