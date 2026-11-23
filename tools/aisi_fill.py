@@ -200,7 +200,8 @@ def template(S, nums):
 def main():
     for stream in (sys.stdout, sys.stderr):  # Windows에서 '> 파일' 로 저장해도 UTF-8로
         try:
-            stream.reconfigure(encoding="utf-8")
+            # 파일로 보낼 때(> answers.txt)는 BOM을 붙여 메모장 등이 UTF-8로 확실히 알아보게 한다
+            stream.reconfigure(encoding="utf-8" if stream.isatty() or stream is sys.stderr else "utf-8-sig")
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -229,7 +230,7 @@ def main():
         body = template(S, a.template)
         made = [x for x in (nums or sorted(have)) if x in have]
         if a.out:
-            with open(a.out, "w", encoding="utf-8") as f:
+            with open(a.out, "w", encoding="utf-8-sig") as f:
                 f.write(body + "\n")
             log("✓ %s 에 빈 정답지를 만들었습니다 (대화 %s)" % (os.path.abspath(a.out), ", ".join(made) or "없음"))
         else:
