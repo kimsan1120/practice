@@ -200,8 +200,7 @@ def template(S, nums):
 def main():
     for stream in (sys.stdout, sys.stderr):  # Windows에서 '> 파일' 로 저장해도 UTF-8로
         try:
-            # 파일로 보낼 때(> answers.txt)는 BOM을 붙여 메모장 등이 UTF-8로 확실히 알아보게 한다
-            stream.reconfigure(encoding="utf-8" if stream.isatty() or stream is sys.stderr else "utf-8-sig")
+            stream.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -234,6 +233,8 @@ def main():
                 f.write(body + "\n")
             log("✓ %s 에 빈 정답지를 만들었습니다 (대화 %s)" % (os.path.abspath(a.out), ", ".join(made) or "없음"))
         else:
+            if not sys.stdout.isatty():  # '> answers.txt' 일 때 BOM을 붙여 메모장 등이 UTF-8로 확실히 알아보게
+                sys.stdout.reconfigure(encoding="utf-8-sig")
             print(body)
             if not sys.stdout.isatty():
                 log("✓ 빈 정답지를 출력했습니다 (대화 %s)" % (", ".join(made) or "없음"))
