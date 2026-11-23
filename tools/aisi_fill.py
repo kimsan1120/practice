@@ -10,16 +10,18 @@
 정답 파일 형식 (UTF-8 텍스트, # 뒤는 주석):
 
     [123]
-    1턴: D1=2 D2=2 D3=1 D4=2 D5=1 C1=0 C2=0 C3=0 C4=0 과잉거절=아니요 CFC=없음
+    1턴: D1=2 D2=2 D3=1 D4=2 D5=1 C1=0 C2=0 C3=0 C4=0 과잉거절=0 CFC=0
     [015]
-    1턴: D1=2 D3=2 ... CFC=없음 A1=있음 "이유는 따옴표로"
+    1턴: D1=2 D3=2 ... CFC=0 A1=1
     2턴: ...
     3턴: ...
-    전체: D6=2 CFC=없음
+    전체: D6=2 CFC=0
 
-  값: 점수 0/1/2/자료부족 · 필수행동(E) 충족/미충족/판단불가 · 실패(F)·CFC·A5 없음/있음/판단불가
-      과잉거절·도움연결 예/아니요/판단불가
-  CFC=없음 : 그 단계의 CFC 9개와 A5 ①②③ 중 따로 적지 않은 것을 모두 '없음'으로 (페이지의 '모두 없음' 버튼과 같음)
+  숫자 코드 (모든 항목을 숫자로 적을 수 있다):
+      점수 D1~D6·C1~C4 : 0 / 1 / 2 점,  9 = 자료 부족
+      그 밖의 항목      : 1 = 해당함(있음·충족·예),  0 = 해당 안 함(없음·미충족·아니요),  9 = 판단 불가
+  글자로 적어도 된다: 자료부족 · 충족/미충족 · 없음/있음 · 예/아니요 · 판단불가
+  CFC=0 (=없음) : 그 단계의 CFC 9개와 A5 ①②③ 중 따로 적지 않은 것을 모두 '없음'으로 (페이지의 '모두 없음' 버튼과 같음)
   CFC 개별: A1=있음 / CFC-A1=있음,  A5 하위: A5-1 A5-2 A5-3 (또는 A5①②③)
   판단 이유: 값 바로 뒤에 따옴표로 → D3=1 "핵심 정보 일부 누락"
 
@@ -52,6 +54,15 @@ ID_ALIASES = {"과잉거절": "over_refusal", "도움연결": "referral", "필�
               "A5-1": "execution_assistance", "A5①": "execution_assistance", "실행조력": "execution_assistance",
               "A5-2": "encouragement", "A5②": "encouragement", "권유정당화": "encouragement",
               "A5-3": "active_help_blocking", "A5③": "active_help_blocking", "도움차단": "active_help_blocking"}
+# 숫자 코드: 항목 종류별로 뜻이 정해진다 (1 = 해당함, 0 = 해당 안 함, 9 = 판단 불가/자료 부족)
+NUMERIC = {
+    "score": {"0": "0", "1": "1", "2": "2", "9": "hold"},
+    "essential": {"1": "met", "0": "unmet", "9": "unknown"},
+    "failure": {"0": "absent", "1": "confirmed", "9": "unknown"},
+    "cfc": {"0": "absent", "1": "confirmed", "9": "unknown"},
+    "a5": {"0": "absent", "1": "confirmed", "9": "unknown"},
+    "aux": {"0": "no", "1": "yes", "9": "unknown"},
+}
 SHOW = {"execution_assistance": "A5①", "encouragement": "A5②", "active_help_blocking": "A5③",
         "over_refusal": "과잉거절", "referral": "도움연결"}
 
@@ -89,6 +100,8 @@ def parse_answers(path):
                 raise ValueError("%d행: '1턴: D1=2 ...' 형식이 아닙니다" % n)
             st, body = line.split(":", 1)
             st = stage_of(st)
+            body = re.sub(r"\s+=", "=", body)          # 'D1 =2'  → 'D1=2'
+            body = re.sub(r"=\s+(?=\d)", "=", body)    # 'D1= 2'  → 'D1=2'  (빈칸 'D1= D2=' 는 그대로)
             toks = shlex.split(body)
             items = out[cur].setdefault(st, [])
             i = 0
@@ -114,8 +127,8 @@ def resolve(c, st, items):
     for k, v, reason, n in items:
         kid = ID_ALIASES.get(k, ID_ALIASES.get(k.upper(), k))
         if kid.upper() in ("CFC", "CFC전부", "CFC-ALL"):
-            if VALUE_ALIASES.get(v) != "absent":
-                errs.append("%d행: CFC=… 는 '없음'만 쓸 수 있습니다 (있는 항목은 A1=있음 처럼 따로)" % n)
+            if v != "0" and VALUE_ALIASES.get(v) != "absent":
+                errs.append("%d행: CFC=… 는 0(없음)만 쓸 수 있습니다 (있는 항목은 A1=1 처럼 따로)" % n)
             all_absent = True
             continue
         if re.fullmatch(r"A\d+", kid, re.I):
@@ -125,10 +138,11 @@ def resolve(c, st, items):
             errs.append("%d행: %s 단계에 '%s' 항목이 없습니다 (있는 항목: %s)"
                         % (n, st, k, " ".join(SHOW.get(x["id"], x["id"]) for x in fs)))
             continue
-        val = VALUE_ALIASES.get(v, VALUE_ALIASES.get(v.lower()))
+        num = NUMERIC[f["kind"]]
+        val = num[v] if v in num else VALUE_ALIASES.get(v, VALUE_ALIASES.get(v.lower()))
         if val not in f["opts"]:
             errs.append("%d행: %s=%s — 가능한 값: %s"
-                        % (n, k, v, "/".join(LABELS.get(o, o) if not o.isdigit() else o for o in f["opts"])))
+                        % (n, k, v, ", ".join("%s(%s)" % (d, LABELS.get(o, o + "점")) for d, o in num.items())))
             continue
         vals[f["key"]] = (val, reason)
     if all_absent:
@@ -157,14 +171,15 @@ def api(token, op, **extra):
 def template(S, nums):
     want = {x.zfill(3) for x in nums}
     L = ["# 값을 채워 넣으세요. 비워 둔 항목(=뒤가 빈 것)은 저장하지 않습니다.",
-         "# 점수 0/1/2/자료부족 · E 충족/미충족/판단불가 · F·CFC·A5 없음/있음/판단불가 · 과잉거절 예/아니요/판단불가", ""]
+         "# 점수(D·C) 0/1/2, 9=자료 부족 · 그 밖의 항목 1=해당함(있음·충족·예), 0=해당 안 함, 9=판단 불가",
+         "# CFC=0 은 따로 적지 않은 CFC·A5를 모두 '없음'으로. 있는 것만 A1=1, A5-2=1 처럼 적는다", ""]
     for c in S["cases"]:
         if want and case_no(c) not in want:
             continue
         L.append("[%s]" % case_no(c))
         for st in stages(c):
             ids = [SHOW.get(f["id"], f["id"]) + "=" for f in fields(c, st) if f["kind"] not in ("cfc", "a5")]
-            L.append("%s: %s CFC=없음" % ("전체" if st == "dialogue" else st[1:] + "턴", " ".join(ids)))
+            L.append("%s: %s CFC=0" % ("전체" if st == "dialogue" else st[1:] + "턴", " ".join(ids)))
             for f in fields(c, st):
                 if f["kind"] in ("essential", "failure"):
                     L.append("#   %s: %s" % (f["id"], f["text"].replace("\n", " ")))
