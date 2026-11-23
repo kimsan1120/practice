@@ -34,6 +34,7 @@ import os
 import re
 import shlex
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -149,6 +150,8 @@ def api(token, op, **extra):
             return e.code, json.load(e)
         except Exception:
             return e.code, {"error": str(e)}
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        return 0, {"error": str(e)}
 
 
 def template(S, nums):
@@ -175,6 +178,7 @@ def main():
     ap.add_argument("answers", nargs="?", help="정답 파일 경로")
     ap.add_argument("--template", nargs="*", metavar="번호", help="빈 정답지 출력 (번호 생략 시 전체)")
     ap.add_argument("--apply", action="store_true", help="실제로 임시 저장한다 (없으면 미리보기만)")
+    ap.add_argument("--delay", type=float, default=1.0, help="저장 요청 사이 간격(초), 기본 1초")
     ap.add_argument("--load-json", help=argparse.SUPPRESS)  # 오프라인 미리보기 테스트용
     a = ap.parse_args()
     if a.apply and a.load_json:
@@ -240,9 +244,13 @@ def main():
         print("\n미리보기입니다. 실제로 임시 저장하려면 --apply 를 붙여 다시 실행하세요. (제출은 하지 않습니다)")
         return
 
+    first = True
     for no, c, r, new, allf in plan:
         if not new:
             continue
+        if not first:
+            time.sleep(a.delay)  # 요청 사이 간격 (서버 부담·속도 제한 방지)
+        first = False
         answers = json.loads(json.dumps(r.get("answers") or {}))
         for k, (v, why) in new.items():
             ans = dict(answers.get(k) or {})
@@ -250,8 +258,12 @@ def main():
             if why:
                 ans["reason"] = why
             answers[k] = ans
-        status, data = api(token, "save", case_id=c["case_id"], answers=answers,
-                           notes=r.get("notes", ""), revision=r.get("revision", 0))
+        for attempt in range(4):  # 429·5xx·네트워크 오류는 잠시 기다렸다 다시 시도
+            status, data = api(token, "save", case_id=c["case_id"], answers=answers,
+                               notes=r.get("notes", ""), revision=r.get("revision", 0))
+            if status not in (0, 429) and status < 500:
+                break
+            time.sleep(a.delay * 2 ** (attempt + 1))
         if status == 200:
             print("✓ 대화 %s 임시 저장 (revision %s)" % (no, data.get("rating", {}).get("revision")))
         elif status == 409:
