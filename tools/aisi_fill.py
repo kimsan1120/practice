@@ -26,7 +26,7 @@
   판단 이유: 값 바로 뒤에 따옴표로 → D3=1 "핵심 정보 일부 누락"
 
 사용 예:
-  python tools/aisi_fill.py <링크> --template 123 015 > answers.txt   # 빈 정답지 만들기
+  python tools/aisi_fill.py <링크> --template 123 015 -o answers.txt  # 빈 정답지 만들기
   python tools/aisi_fill.py <링크> answers.txt                         # 미리보기
   python tools/aisi_fill.py <링크> answers.txt --apply                 # 임시 저장
 """
@@ -206,7 +206,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source", help="평가 링크 또는 토큰")
     ap.add_argument("answers", nargs="?", help="정답 파일 경로")
-    ap.add_argument("--template", nargs="*", metavar="번호", help="빈 정답지 출력 (번호 생략 시 전체)")
+    ap.add_argument("--template", nargs="*", metavar="번호", help="빈 정답지 만들기 (번호 생략 시 전체)")
+    ap.add_argument("-o", "--out", help="--template 결과를 저장할 파일 (예: answers.txt)")
     ap.add_argument("--apply", action="store_true", help="실제로 임시 저장한다 (없으면 미리보기만)")
     ap.add_argument("--delay", type=float, default=1.0, help="저장 요청 사이 간격(초), 기본 1초")
     ap.add_argument("--load-json", help=argparse.SUPPRESS)  # 오프라인 미리보기 테스트용
@@ -214,14 +215,32 @@ def main():
     if a.apply and a.load_json:
         ap.error("--apply 는 저장해 둔 JSON이 아니라 서버의 최신 상태로만 할 수 있습니다")
     token = a.source.rstrip("/").split("/")[-1]
+    log = lambda m: print(m, file=sys.stderr, flush=True)  # 진행 상황은 화면(stderr)에 — '> 파일' 로 보내도 보인다
+    log("서버에서 배정 목록을 불러오는 중…")
     S = load_data(a.source, a.load_json)
+    log("✓ 대화 %d개를 불러왔습니다" % len(S["cases"]))
 
     if a.template is not None:
-        print(template(S, a.template))
+        nums = [x.zfill(3) for x in a.template]
+        have = {case_no(c) for c in S["cases"]}
+        for x in nums:
+            if x not in have:
+                log("✗ 대화 %s: 이 링크에 배정되지 않은 대화입니다" % x)
+        body = template(S, a.template)
+        made = [x for x in (nums or sorted(have)) if x in have]
+        if a.out:
+            with open(a.out, "w", encoding="utf-8") as f:
+                f.write(body + "\n")
+            log("✓ %s 에 빈 정답지를 만들었습니다 (대화 %s)" % (os.path.abspath(a.out), ", ".join(made) or "없음"))
+        else:
+            print(body)
+            if not sys.stdout.isatty():
+                log("✓ 빈 정답지를 출력했습니다 (대화 %s)" % (", ".join(made) or "없음"))
         return
     if not a.answers:
         ap.error("정답 파일이 필요합니다 (또는 --template)")
 
+    log("정답 파일 읽는 중: %s" % os.path.abspath(a.answers))
     parsed = parse_answers(a.answers)
     cases = {case_no(c): c for c in S["cases"]}
     plan, errors = [], []
@@ -275,6 +294,8 @@ def main():
         return
 
     first = True
+    todo = [p for p in plan if p[3]]
+    log("\n저장 시작: 대화 %d개 (간격 %.1f초)" % (len(todo), a.delay))
     for no, c, r, new, allf in plan:
         if not new:
             continue
